@@ -31,6 +31,13 @@ try:
 except ImportError:
     OPENAI_AVAILABLE = False
 
+try:
+    import magic
+    MAGIC_AVAILABLE = True
+except ImportError:
+    st.error("❌ python-magic-bin é obrigatório! Instale: pip install python-magic-bin")
+    st.stop()
+
 # Configuração da página
 st.set_page_config(
     page_title="AgentRisk - Análise de Código para Avaliação de Riscos",
@@ -262,28 +269,139 @@ class CodeFileAnalyzer:
         }
     
     def _read_file_content(self, uploaded_file) -> str:
-        """Lê o conteúdo de um arquivo uploaded"""
+        """Lê o conteúdo de um arquivo uploaded com validação robusta"""
         try:
-            for encoding in ['utf-8', 'latin-1', 'cp1252']:
+            # Ler conteúdo como bytes primeiro
+            uploaded_file.seek(0)
+            file_bytes = uploaded_file.read()
+            
+            # === VALIDAÇÃO ROBUSTA COM MAGIC ===
+            if MAGIC_AVAILABLE:
+                # Detectar tipo REAL do arquivo
+                mime_type = magic.from_buffer(file_bytes, mime=True)
+                file_type_desc = magic.from_buffer(file_bytes)
+                
+                # Verificar se é arquivo de texto/código
+                safe_mime_types = [
+                    'text/plain', 'text/x-python', 'text/x-c', 'text/x-java',
+                    'text/javascript', 'application/javascript', 'text/x-php',
+                    'text/x-ruby', 'text/x-go', 'text/x-csharp', 'text/x-sql',
+                    'application/json', 'text/x-yaml', 'application/xml',
+                    'text/xml', 'text/markdown', 'text/x-markdown',
+                    'application/x-php', 'text/x-script.python'
+                ]
+                
+                # Verificar se o tipo MIME é seguro
+                is_safe_file = any(safe_type in mime_type for safe_type in safe_mime_types)
+                is_text_file = mime_type.startswith('text/') 
+                
+                if not (is_safe_file or is_text_file):
+                    st.warning(f"⚠️ Arquivo {uploaded_file.name} detectado como: {file_type_desc}")
+                    st.warning(f"⚠️ MIME type: {mime_type} - Pode não ser um arquivo de código")
+                    
+                    # Perguntar se quer continuar
+                    if not st.checkbox(f"Continuar análise de {uploaded_file.name}? (arquivo pode não ser código)", key=f"continue_{uploaded_file.name}"):
+                        return ""
+                
+                # Log do tipo detectado para debug
+                st.info(f"🔍 {uploaded_file.name}: {mime_type} - {file_type_desc[:50]}...")
+            
+            # === DECODIFICAÇÃO ROBUSTA ===
+            # Tentar diferentes encodings
+            for encoding in ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']:
                 try:
-                    uploaded_file.seek(0)
-                    content = uploaded_file.read().decode(encoding)
-                    return content
+                    content = file_bytes.decode(encoding)
+                    
+                    # Validação adicional: verificar se é realmente texto
+                    if self._is_text_content(content):
+                        return content
+                    else:
+                        st.warning(f"⚠️ {uploaded_file.name} não parece conter código de texto válido")
+                        return ""
+                        
                 except UnicodeDecodeError:
                     continue
             
-            uploaded_file.seek(0)
-            return str(uploaded_file.read())
+            # Se chegou aqui, não conseguiu decodificar
+            st.error(f"❌ Não foi possível decodificar {uploaded_file.name} como arquivo de texto")
+            return ""
             
         except Exception as e:
-            st.error(f"Erro ao ler arquivo {uploaded_file.name}: {str(e)}")
+            st.error(f"❌ Erro ao processar {uploaded_file.name}: {str(e)}")
             return ""
     
+    def _is_text_content(self, content: str) -> bool:
+        """Verifica se o conteúdo é realmente texto/código válido"""
+        
+        # Verificar se tem muito conteúdo binário
+        binary_chars = sum(1 for char in content if ord(char) < 32 and char not in '\n\r\t')
+        total_chars = len(content)
+        
+        if total_chars == 0:
+            return False
+            
+        # Se mais de 10% são caracteres binários, provavelmente não é texto
+        binary_ratio = binary_chars / total_chars
+        if binary_ratio > 0.1:
+            return False
+        
+        # Verificar se tem padrões de código comuns
+        code_patterns = [
+            'import ', 'function ', 'class ', 'def ', 'var ', 'const ',
+            'public ', 'private ', 'package ', '<?php', '#!/', 'SELECT ',
+            'INSERT ', 'UPDATE ', 'CREATE ', '{', '}', '(', ')', ';',
+            '//', '/*', '*/', '#', 'if ', 'else ', 'for ', 'while '
+        ]
+        
+        content_lower = content.lower()
+        code_pattern_matches = sum(1 for pattern in code_patterns if pattern in content_lower)
+        
+        # Se tem pelo menos alguns padrões de código, provavelmente é válido
+        return code_pattern_matches >= 2 or len(content.strip()) > 10
+    
     def _analyze_single_file(self, filename: str, content: str) -> Dict:
-        """Analisa um único arquivo de código"""
+        """Analisa um único arquivo de código com detecção robusta"""
         
         file_ext = os.path.splitext(filename.lower())[1]
         file_type = SUPPORTED_EXTENSIONS.get(file_ext, 'Unknown')
+        
+        # === DETECÇÃO AVANÇADA DE TIPO ===
+        if MAGIC_AVAILABLE:
+            try:
+                # Re-detectar o tipo baseado no conteúdo
+                content_bytes = content.encode('utf-8')
+                mime_type = magic.from_buffer(content_bytes, mime=True)
+                
+                # Mapear MIME types para tipos mais específicos
+                mime_to_type = {
+                    'text/x-python': 'Python',
+                    'text/x-script.python': 'Python',
+                    'text/javascript': 'JavaScript',
+                    'application/javascript': 'JavaScript',
+                    'text/x-php': 'PHP',
+                    'application/x-php': 'PHP',
+                    'text/x-java': 'Java',
+                    'text/x-c': 'C/C++',
+                    'text/x-c++': 'C++',
+                    'text/x-csharp': 'C#',
+                    'text/x-ruby': 'Ruby',
+                    'text/x-go': 'Go',
+                    'text/x-sql': 'SQL',
+                    'application/json': 'JSON Config',
+                    'text/x-yaml': 'YAML Config',
+                    'application/xml': 'XML Config',
+                    'text/xml': 'XML Config',
+                    'text/markdown': 'Markdown',
+                    'text/x-markdown': 'Markdown'
+                }
+                
+                # Se magic detectou um tipo mais específico, usar ele
+                if mime_type in mime_to_type:
+                    file_type = mime_to_type[mime_type]
+                    
+            except Exception as e:
+                # Se magic falhar, usar detecção por extensão
+                pass
         
         lines = content.split('\n')
         lines_count = len(lines)
@@ -306,7 +424,8 @@ class CodeFileAnalyzer:
             "risk_patterns": risk_patterns,
             "security_issues": security_issues,
             "content_preview": self._get_content_preview(content),
-            "critical_lines": self._find_critical_lines(lines)
+            "critical_lines": self._find_critical_lines(lines),
+            "mime_validation": "OK" if MAGIC_AVAILABLE else "SKIP"
         }
     
     def _classify_file_purpose(self, filename: str, content: str) -> str:
