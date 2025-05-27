@@ -1,4 +1,3 @@
-streamlit>=1.28.0
-openai>=1.0.0
-fpdf>=2.7.6
-python-dateutil>=2.8.2
+streamlit
+openai
+fpdf2
