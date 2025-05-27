@@ -1,13 +1,26 @@
 import streamlit as st
 import json
 import datetime
-from fpdf import FPDF
 import base64
 import io
 from typing import Dict, List, Tuple
 import re
-import openai
-from openai import OpenAI
+
+# Importações condicionais para evitar erros
+try:
+    from fpdf import FPDF
+    PDF_AVAILABLE = True
+except ImportError:
+    PDF_AVAILABLE = False
+    st.warning("📄 Geração de PDF indisponível. Instale fpdf2 para ativar esta funcionalidade.")
+
+try:
+    import openai
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    st.warning("🤖 OpenAI indisponível. Usando análise baseada em regras.")
 
 # Configuração da página
 st.set_page_config(
@@ -21,12 +34,18 @@ st.set_page_config(
 @st.cache_resource
 def get_openai_client():
     """Inicializa cliente OpenAI com chave dos secrets"""
+    if not OPENAI_AVAILABLE:
+        return None
+        
     try:
-        api_key = st.secrets["OPENAI_API_KEY"]
-        return OpenAI(api_key=api_key)
+        if "OPENAI_API_KEY" in st.secrets:
+            api_key = st.secrets["OPENAI_API_KEY"]
+            return OpenAI(api_key=api_key)
+        else:
+            st.info("💡 Configure OPENAI_API_KEY nos Secrets para ativar análise avançada com IA")
+            return None
     except Exception as e:
-        st.error(f"❌ Erro ao configurar OpenAI: {str(e)}")
-        st.info("💡 Verifique se OPENAI_API_KEY está configurada nos Secrets do Streamlit")
+        st.warning(f"⚠️ Problema na configuração OpenAI: {str(e)}")
         return None
 
 # CSS personalizado
@@ -419,80 +438,144 @@ class AgentRiskAnalyzer:
 class PDFGenerator:
     """Gerador de relatórios em PDF otimizado"""
     
+    def __init__(self):
+        self.pdf_available = PDF_AVAILABLE
+    
     def generate_report(self, analysis_result: Dict) -> bytes:
         """Gera relatório PDF da análise de riscos"""
         
-        pdf = FPDF()
-        pdf.add_page()
+        if not self.pdf_available:
+            # Fallback: gerar relatório em texto
+            return self._generate_text_report(analysis_result)
         
-        # Configurar fonte
-        pdf.set_font("Arial", "B", 18)
+        try:
+            pdf = FPDF()
+            pdf.add_page()
+            
+            # Configurar fonte
+            pdf.set_font("Arial", "B", 18)
+            
+            # Cabeçalho
+            pdf.cell(0, 15, "AgentRisk - Relatorio de Avaliacao", 0, 1, 'C')
+            pdf.set_font("Arial", size=12)
+            pdf.cell(0, 10, f"Sistema: {analysis_result.get('system_name', 'N/A')}", 0, 1, 'C')
+            pdf.cell(0, 8, f"Data da Analise: {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}", 0, 1, 'C')
+            pdf.cell(0, 8, f"Metodo: {analysis_result.get('analysis_method', 'N/A')}", 0, 1, 'C')
+            pdf.ln(10)
+            
+            # Sumário Executivo
+            pdf.set_font("Arial", "B", 14)
+            pdf.cell(0, 10, "SUMARIO EXECUTIVO", 0, 1)
+            pdf.set_font("Arial", size=11)
+            
+            global_score = analysis_result['global_score']
+            global_level = analysis_result['global_level']
+            
+            # Score Global
+            pdf.cell(0, 8, f"Score Global de Risco: {global_score}/100", 0, 1)
+            pdf.cell(0, 8, f"Classificacao: {global_level}", 0, 1)
+            
+            # Contadores por nível
+            high_count = sum(1 for r in analysis_result['risks'].values() if r['level'] == 'Alto')
+            medium_count = sum(1 for r in analysis_result['risks'].values() if r['level'] == 'Moderado')
+            low_count = sum(1 for r in analysis_result['risks'].values() if r['level'] == 'Baixo')
+            
+            pdf.cell(0, 8, f"Riscos Altos: {high_count} | Moderados: {medium_count} | Baixos: {low_count}", 0, 1)
+            pdf.ln(8)
+            
+            # Riscos por categoria
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 10, "ANALISE DETALHADA", 0, 1)
+            
+            # Ordenar riscos por score (maior primeiro)
+            sorted_risks = sorted(
+                analysis_result['risks'].items(),
+                key=lambda x: x[1]['score'],
+                reverse=True
+            )
+            
+            pdf.set_font("Arial", size=9)
+            
+            for risk_id, risk_data in sorted_risks[:10]:  # Limitar a 10 para evitar overflow
+                risk_info = AGENTIC_AI_RISKS[risk_id]
+                
+                # Nome do risco (evitar caracteres especiais)
+                risk_name = risk_info['nome'].replace('ã', 'a').replace('ç', 'c').replace('õ', 'o')
+                pdf.set_font("Arial", "B", 10)
+                pdf.cell(0, 7, f"{risk_id}. {risk_name}", 0, 1)
+                
+                # Detalhes
+                pdf.set_font("Arial", size=9)
+                pdf.cell(0, 5, f"Score: {risk_data['score']}/100 | Nivel: {risk_data['level']}", 0, 1)
+                
+                # Primeira recomendação (sem acentos)
+                if risk_data['recommendations']:
+                    rec = risk_data['recommendations'][0][:80].replace('ã', 'a').replace('ç', 'c')
+                    pdf.cell(0, 5, f"Recomendacao: {rec}...", 0, 1)
+                
+                pdf.ln(2)
+            
+            # Rodapé
+            pdf.ln(10)
+            pdf.set_font("Arial", "I", 8)
+            pdf.cell(0, 5, "Este relatorio foi gerado automaticamente pelo sistema AgentRisk", 0, 1, 'C')
+            
+            return pdf.output(dest='S').encode('latin-1')
+            
+        except Exception as e:
+            st.error(f"Erro ao gerar PDF: {str(e)}")
+            return self._generate_text_report(analysis_result)
+    
+    def _generate_text_report(self, analysis_result: Dict) -> bytes:
+        """Gera relatório em formato texto como fallback"""
         
-        # Cabeçalho
-        pdf.cell(0, 15, "AgentRisk - Relatório de Avaliação", 0, 1, 'C')
-        pdf.set_font("Arial", size=12)
-        pdf.cell(0, 10, f"Sistema: {analysis_result.get('system_name', 'N/A')}", 0, 1, 'C')
-        pdf.cell(0, 8, f"Data da Análise: {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}", 0, 1, 'C')
-        pdf.cell(0, 8, f"Método: {analysis_result.get('analysis_method', 'N/A')}", 0, 1, 'C')
-        pdf.ln(10)
+        report = f"""
+AGENTRISK - RELATÓRIO DE AVALIAÇÃO DE RISCOS
+============================================
+
+Sistema: {analysis_result.get('system_name', 'N/A')}
+Data: {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}
+Método: {analysis_result.get('analysis_method', 'Análise Local')}
+
+SUMÁRIO EXECUTIVO
+=================
+Score Global: {analysis_result['global_score']}/100
+Nível de Risco: {analysis_result['global_level']}
+
+DISTRIBUIÇÃO DE RISCOS
+=====================
+"""
         
-        # Sumário Executivo
-        pdf.set_font("Arial", "B", 14)
-        pdf.cell(0, 10, "SUMÁRIO EXECUTIVO", 0, 1)
-        pdf.set_font("Arial", size=11)
-        
-        global_score = analysis_result['global_score']
-        global_level = analysis_result['global_level']
-        
-        # Score Global
-        pdf.cell(0, 8, f"Score Global de Risco: {global_score}/100", 0, 1)
-        pdf.cell(0, 8, f"Classificação: {global_level}", 0, 1)
-        
-        # Contadores por nível
         high_count = sum(1 for r in analysis_result['risks'].values() if r['level'] == 'Alto')
         medium_count = sum(1 for r in analysis_result['risks'].values() if r['level'] == 'Moderado')
         low_count = sum(1 for r in analysis_result['risks'].values() if r['level'] == 'Baixo')
         
-        pdf.cell(0, 8, f"Riscos Altos: {high_count} | Moderados: {medium_count} | Baixos: {low_count}", 0, 1)
-        pdf.ln(8)
+        report += f"Riscos Altos: {high_count}\n"
+        report += f"Riscos Moderados: {medium_count}\n"
+        report += f"Riscos Baixos: {low_count}\n\n"
         
-        # Riscos por categoria
-        pdf.set_font("Arial", "B", 12)
-        pdf.cell(0, 10, "ANÁLISE DETALHADA", 0, 1)
+        report += "ANÁLISE DETALHADA\n"
+        report += "=================\n\n"
         
-        # Ordenar riscos por score (maior primeiro)
+        # Ordenar riscos por score
         sorted_risks = sorted(
             analysis_result['risks'].items(),
             key=lambda x: x[1]['score'],
             reverse=True
         )
         
-        pdf.set_font("Arial", size=9)
-        
         for risk_id, risk_data in sorted_risks:
             risk_info = AGENTIC_AI_RISKS[risk_id]
-            
-            # Nome do risco
-            pdf.set_font("Arial", "B", 10)
-            pdf.cell(0, 7, f"{risk_id}. {risk_info['nome']}", 0, 1)
-            
-            # Detalhes
-            pdf.set_font("Arial", size=9)
-            pdf.cell(0, 5, f"Score: {risk_data['score']}/100 | Nível: {risk_data['level']} | Categoria: {risk_info['categoria']}", 0, 1)
-            
-            # Primeira recomendação
+            report += f"{risk_id}. {risk_info['nome']}\n"
+            report += f"   Score: {risk_data['score']}/100 | Nível: {risk_data['level']}\n"
+            report += f"   Categoria: {risk_info['categoria']}\n"
             if risk_data['recommendations']:
-                pdf.cell(0, 5, f"Recomendação: {risk_data['recommendations'][0][:80]}...", 0, 1)
-            
-            pdf.ln(2)
+                report += f"   Recomendação: {risk_data['recommendations'][0]}\n"
+            report += "\n"
         
-        # Rodapé
-        pdf.ln(10)
-        pdf.set_font("Arial", "I", 8)
-        pdf.cell(0, 5, "Este relatório foi gerado automaticamente pelo sistema AgentRisk", 0, 1, 'C')
-        pdf.cell(0, 5, "Para mais informações sobre mitigação de riscos, consulte a análise detalhada no sistema", 0, 1, 'C')
+        report += "\n---\nRelatório gerado pelo AgentRisk\n"
         
-        return pdf.output(dest='S').encode('latin-1')
+        return report.encode('utf-8')
 
 # Inicialização com cache
 @st.cache_resource
@@ -512,16 +595,29 @@ def main():
     <div class="main-header">
         <h1>🛡️ AgentRisk</h1>
         <p>IA para Governança, Conformidade e Avaliação de Riscos em Sistemas Autônomos</p>
-        <small>🚀 Rodando no Streamlit Cloud | Powered by OpenAI GPT-4</small>
+        <small>🚀 Rodando no Streamlit Cloud</small>
     </div>
     """, unsafe_allow_html=True)
     
-    # Verificar configuração OpenAI
+    # Verificar configurações
     client = get_openai_client()
-    if client:
-        st.success("✅ OpenAI configurada corretamente")
-    else:
-        st.error("❌ OpenAI não configurada - usando análise alternativa")
+    
+    # Status das funcionalidades
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if client:
+            st.success("✅ OpenAI: Ativo")
+        else:
+            st.info("ℹ️ OpenAI: Análise Local")
+    
+    with col2:
+        if PDF_AVAILABLE:
+            st.success("✅ PDF: Disponível")
+        else:
+            st.info("ℹ️ PDF: Relatório em Texto")
+            
+    with col3:
+        st.success("✅ Sistema: Operacional")
     
     # Sidebar
     with st.sidebar:
@@ -744,16 +840,24 @@ def show_analysis_results(analysis_result: Dict):
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        if st.button("📄 Gerar Relatório PDF", use_container_width=True):
-            with st.spinner("Gerando relatório PDF..."):
+        if st.button("📄 Gerar Relatório", use_container_width=True):
+            with st.spinner("Gerando relatório..."):
                 pdf_generator = get_pdf_generator()
-                pdf_bytes = pdf_generator.generate_report(analysis_result)
+                report_bytes = pdf_generator.generate_report(analysis_result)
+                
+                # Determinar tipo de arquivo baseado na disponibilidade do PDF
+                if PDF_AVAILABLE:
+                    file_name = f"AgentRisk_Report_{analysis_result.get('system_name', 'Sistema')}_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+                    mime_type = "application/pdf"
+                else:
+                    file_name = f"AgentRisk_Report_{analysis_result.get('system_name', 'Sistema')}_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+                    mime_type = "text/plain"
                 
                 st.download_button(
-                    label="⬇️ Download PDF",
-                    data=pdf_bytes,
-                    file_name=f"AgentRisk_Report_{analysis_result.get('system_name', 'Sistema')}_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
-                    mime="application/pdf",
+                    label="⬇️ Download Relatório",
+                    data=report_bytes,
+                    file_name=file_name,
+                    mime=mime_type,
                     use_container_width=True
                 )
     
