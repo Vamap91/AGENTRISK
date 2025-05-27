@@ -1,51 +1,4 @@
-# Timeline de remediação DETALHADA
-        remediation_timeline = compliance.get('remediation_timeline', {})
-        if remediation_timeline:
-            st.subheader("⏰ Timeline Detalhada de Remediação")
-            
-            # Métricas principais
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                immediate = remediation_timeline.get('immediate', 0)
-                st.metric("🚨 Imediato", immediate, help="1-2 semanas - Ação urgente")
-            
-            with col2:
-                short_term = remediation_timeline.get('short_term', 0)
-                st.metric("⚠️ Curto Prazo", short_term, help="2-4 semanas")
-            
-            with col3:
-                medium_term = remediation_timeline.get('medium_term', 0)
-                st.metric("📅 Médio Prazo", medium_term, help="1-3 meses")
-            
-            with col4:
-                total_time = remediation_timeline.get('estimated_total_time', 'N/A')
-                st.metric("⏱️ Tempo Total", total_time)
-            
-            # Detalhes específicos por violação
-            timeline_details = remediation_timeline.get('details', [])
-            if timeline_details:
-                st.markdown("**📋 Detalhamento por Violação:**")
-                
-                for detail in timeline_details[:10]:  # Top 10 mais urgentes
-                    violation = detail.get('violation', 'N/A')
-                    timeline = detail.get('timeline', 'N/A')
-                    reason = detail.get('reason', 'N/A')
-                    penalty = detail.get('penalty_risk', 'N/A')
-                    
-                    # Emoji baseado na urgência
-                    if "Imediato" in timeline:
-                        emoji = "🔴"
-                        alert_type = "error"
-                    elif "Curto" in timeline:
-                        emoji = "🟡"
-                        alert_type = "warning"
-                    else:
-                        emoji = "🟢"
-                        alert_type = "info"
-                    
-                    with st.expander(f"{emoji} {violation} - {timeline}"):
-                        import streamlit as st
+import streamlit as st
 import json
 import datetime
 import base64
@@ -54,13 +7,13 @@ import os
 import re
 import asyncio
 import hashlib
+import threading
+import time
 from typing import Dict, List, Tuple, Any, Optional
 from dataclasses import dataclass
 from enum import Enum
-import threading
-import time
 
-# Importações obrigatórias
+# Third-party imports (if available)
 try:
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import letter, A4
@@ -69,7 +22,7 @@ try:
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
     PDF_AVAILABLE = True
 except ImportError:
-    st.error("❌ ReportLab é obrigatório para funcionar!")
+    st.error("❌ ReportLab is required for PDF functionality!")
     st.stop()
 
 try:
@@ -77,10 +30,11 @@ try:
     from openai import OpenAI
     OPENAI_AVAILABLE = True
 except ImportError:
-    st.error("❌ OpenAI é OBRIGATÓRIO para análise enterprise!")
+    st.error("❌ OpenAI is REQUIRED for enterprise analysis!")
     st.stop()
 
-# Configuração da página
+
+# Streamlit Page Configuration
 st.set_page_config(
     page_title="AgentRisk Pro - Enterprise Analysis",
     page_icon="🛡️",
@@ -88,19 +42,19 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Classes para estrutura enterprise
+# Classes for Enterprise Structure
 class RiskLevel(Enum):
-    CRITICAL = "Crítico"
-    HIGH = "Alto"
-    MEDIUM = "Moderado"
-    LOW = "Baixo"
-    MINIMAL = "Mínimo"
+    CRITICAL = "Critical"
+    HIGH = "High"
+    MEDIUM = "Moderate"
+    LOW = "Low"
+    MINIMAL = "Minimal"
 
 class ComplianceFramework(Enum):
     EU_AI_ACT = "EU AI Act"
-    LGPD_BRAZIL = "LGPD Brasil"
-    GDPR_EU = "GDPR Europa"
-    SOX_US = "SOX Estados Unidos"
+    LGPD_BRAZIL = "LGPD Brazil"
+    GDPR_EU = "GDPR Europe"
+    SOX_US = "SOX United States"
     BASEL_III = "Basel III"
     PCI_DSS = "PCI DSS"
 
@@ -128,40 +82,40 @@ class ComplianceViolation:
     remediation: List[str]
     penalty_risk: str
 
-# Configuração OpenAI OBRIGATÓRIA
+# OpenAI Configuration (REQUIRED)
 @st.cache_resource
 def get_openai_client():
-    """Inicializa cliente OpenAI - OBRIGATÓRIO"""
+    """Initializes OpenAI client - REQUIRED"""
     if not OPENAI_AVAILABLE:
-        st.error("❌ OpenAI é obrigatório para análise enterprise!")
+        st.error("❌ OpenAI is required for enterprise analysis!")
         st.stop()
-    
+
     try:
-        # Primeiro tenta secrets do Streamlit
+        # First try Streamlit secrets
         if "OPENAI_API_KEY" in st.secrets:
             client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-        # Depois tenta variável de ambiente
+        # Then try environment variable
         elif "OPENAI_API_KEY" in os.environ:
             client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
         else:
-            st.error("❌ Configure OPENAI_API_KEY nos Secrets do Streamlit ou como variável de ambiente!")
-            st.info("Vá em Settings > Secrets e adicione: OPENAI_API_KEY = 'sua-chave-aqui'")
+            st.error("❌ Configure OPENAI_API_KEY in Streamlit Secrets or as an environment variable!")
+            st.info("Go to Settings > Secrets and add: OPENAI_API_KEY = 'your-key-here'")
             st.stop()
-        
-        # Teste obrigatório da API
+
+        # Mandatory API test
         test_response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "test"}],
             max_tokens=5
         )
-        
+
         return client
-        
+
     except Exception as e:
-        st.error(f"❌ Erro na configuração OpenAI: {str(e)}")
+        st.error(f"❌ OpenAI configuration error: {str(e)}")
         st.stop()
 
-# CSS Enterprise
+# Enterprise CSS
 st.markdown("""
 <style>
 .enterprise-header {
@@ -255,93 +209,93 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Riscos Enterprise Detalhados (baseados no relatório IBM)
+# Detailed Enterprise Risks (based on IBM report)
 ENTERPRISE_AGENTIC_RISKS = {
     "AGR001": {
-        "nome": "Desalinhamento de Objetivos Críticos",
-        "categoria": "Governança Estratégica",
-        "descricao": "Agentes podem perseguir objetivos que conflitam com metas organizacionais",
+        "name": "Critical Objective Misalignment",
+        "category": "Strategic Governance",
+        "description": "Agents may pursue objectives that conflict with organizational goals",
         "compliance_frameworks": [ComplianceFramework.EU_AI_ACT, ComplianceFramework.SOX_US],
         "ai_analysis_required": True,
         "technical_patterns": ["goal", "objective", "target", "kpi", "metric"],
         "severity_indicators": ["hardcoded_goals", "no_validation", "conflicting_objectives"]
     },
     "AGR002": {
-        "nome": "Ações Autônomas Não Supervisionadas",
-        "categoria": "Controle Operacional",
-        "descricao": "Execução de ações críticas sem aprovação ou supervisão humana",
+        "name": "Unsupervised Autonomous Actions",
+        "category": "Operational Control",
+        "description": "Execution of critical actions without human approval or supervision",
         "compliance_frameworks": [ComplianceFramework.EU_AI_ACT, ComplianceFramework.BASEL_III],
         "ai_analysis_required": True,
         "technical_patterns": ["autonomous", "auto_execute", "no_human_approval", "direct_action"],
         "severity_indicators": ["financial_transactions", "data_deletion", "system_changes"]
     },
     "AGR003": {
-        "nome": "Uso Inadequado de APIs Críticas",
-        "categoria": "Segurança de Integração",
-        "descricao": "Utilização insegura de APIs financeiras e serviços críticos",
+        "name": "Inadequate Use of Critical APIs",
+        "category": "Integration Security",
+        "description": "Insecure use of financial APIs and critical services",
         "compliance_frameworks": [ComplianceFramework.PCI_DSS, ComplianceFramework.LGPD_BRAZIL],
         "ai_analysis_required": True,
         "technical_patterns": ["api_call", "external_service", "http_request", "webhook"],
         "severity_indicators": ["payment_api", "user_data_api", "admin_endpoints"]
     },
     "AGR004": {
-        "nome": "Viés Algorítmico e Discriminação",
-        "categoria": "Ética e Fairness",
-        "descricao": "Comportamentos discriminatórios baseados em viés nos dados ou algoritmos",
+        "name": "Algorithmic Bias and Discrimination",
+        "category": "Ethics and Fairness",
+        "description": "Discriminatory behaviors based on bias in data or algorithms",
         "compliance_frameworks": [ComplianceFramework.EU_AI_ACT, ComplianceFramework.LGPD_BRAZIL],
         "ai_analysis_required": True,
         "technical_patterns": ["bias", "discrimination", "unfair", "stereotype"],
         "severity_indicators": ["demographic_filtering", "exclusion_rules", "prejudicial_logic"]
     },
     "AGR005": {
-        "nome": "Retenção Inadequada de Dados Sensíveis",
-        "categoria": "Privacidade e Proteção de Dados",
-        "descricao": "Persistência inapropriada de informações pessoais e financeiras",
+        "name": "Inadequate Sensitive Data Retention",
+        "category": "Privacy and Data Protection",
+        "description": "Inappropriate persistence of personal and financial information",
         "compliance_frameworks": [ComplianceFramework.LGPD_BRAZIL, ComplianceFramework.GDPR_EU],
         "ai_analysis_required": True,
         "technical_patterns": ["persist", "cache", "store", "memory", "retention"],
         "severity_indicators": ["personal_data", "financial_info", "no_encryption", "long_retention"]
     },
     "AGR006": {
-        "nome": "Falta de Explicabilidade (Black Box)",
-        "categoria": "Transparência e Auditoria",
-        "descricao": "Incapacidade de explicar decisões e processos do sistema",
+        "name": "Lack of Explainability (Black Box)",
+        "category": "Transparency and Audit",
+        "description": "Inability to explain system decisions and processes",
         "compliance_frameworks": [ComplianceFramework.EU_AI_ACT, ComplianceFramework.SOX_US],
         "ai_analysis_required": True,
         "technical_patterns": ["unexplained", "black_box", "no_logging", "opaque"],
         "severity_indicators": ["financial_decisions", "no_audit_trail", "complex_ml"]
     },
     "AGR007": {
-        "nome": "Vulnerabilidades de Segurança Críticas",
-        "categoria": "Cibersegurança",
-        "descricao": "Exposição a ataques, injeções e falhas de segurança",
+        "name": "Critical Security Vulnerabilities",
+        "category": "Cybersecurity",
+        "description": "Exposure to attacks, injections, and security flaws",
         "compliance_frameworks": [ComplianceFramework.PCI_DSS, ComplianceFramework.SOX_US],
         "ai_analysis_required": True,
         "technical_patterns": ["eval", "exec", "sql_injection", "xss", "csrf"],
         "severity_indicators": ["user_input", "database_access", "admin_functions"]
     },
     "AGR008": {
-        "nome": "Não Conformidade Regulatória",
-        "categoria": "Compliance Legal",
-        "descricao": "Violação de regulamentações específicas do setor financeiro",
+        "name": "Regulatory Non-Compliance",
+        "category": "Legal Compliance",
+        "description": "Violation of specific financial industry regulations",
         "compliance_frameworks": [ComplianceFramework.EU_AI_ACT, ComplianceFramework.LGPD_BRAZIL, ComplianceFramework.BASEL_III],
         "ai_analysis_required": True,
         "technical_patterns": ["compliance", "regulation", "audit", "legal"],
         "severity_indicators": ["no_consent", "data_breach", "reporting_failure"]
     },
     "AGR009": {
-        "nome": "Limitações de Escalabilidade Crítica",
-        "categoria": "Performance Operacional",
-        "descricao": "Falhas na capacidade de escalar sob demanda alta",
+        "name": "Critical Scalability Limitations",
+        "category": "Operational Performance",
+        "description": "Failure to scale under high demand",
         "compliance_frameworks": [ComplianceFramework.SOX_US, ComplianceFramework.BASEL_III],
         "ai_analysis_required": True,
         "technical_patterns": ["bottleneck", "timeout", "memory_leak", "performance"],
         "severity_indicators": ["single_point_failure", "no_load_balancing", "resource_exhaustion"]
     },
     "AGR010": {
-        "nome": "Qualidade e Integridade de Dados",
-        "categoria": "Governança de Dados",
-        "descricao": "Problemas na qualidade, validação e integridade dos dados",
+        "name": "Data Quality and Integrity",
+        "category": "Data Governance",
+        "description": "Problems with data quality, validation, and integrity",
         "compliance_frameworks": [ComplianceFramework.SOX_US, ComplianceFramework.BASEL_III],
         "ai_analysis_required": True,
         "technical_patterns": ["validation", "sanitization", "data_quality", "integrity"],
@@ -349,62 +303,109 @@ ENTERPRISE_AGENTIC_RISKS = {
     }
 }
 
-# Frameworks de Compliance Detalhados
+# Detailed Compliance Frameworks
 COMPLIANCE_REQUIREMENTS = {
     ComplianceFramework.EU_AI_ACT: {
         "name": "EU AI Act",
-        "description": "Regulamentação europeia para sistemas de IA",
+        "description": "European regulation for AI systems",
         "articles": {
-            "Art. 6": "Sistemas de IA de alto risco",
-            "Art. 8": "Conformidade de sistemas de IA de alto risco",
-            "Art. 9": "Sistema de gestão de risco",
-            "Art. 10": "Dados e governança de dados",
-            "Art. 11": "Documentação técnica",
-            "Art. 12": "Manutenção de registros",
-            "Art. 13": "Transparência e fornecimento de informações",
-            "Art. 14": "Supervisão humana",
-            "Art. 15": "Precisão, robustez e cibersegurança"
+            "Art. 6": "High-risk AI systems",
+            "Art. 8": "Conformity of high-risk AI systems",
+            "Art. 9": "Risk management system",
+            "Art. 10": "Data and data governance",
+            "Art. 11": "Technical documentation",
+            "Art. 12": "Record-keeping",
+            "Art. 13": "Transparency and provision of information",
+            "Art. 14": "Human oversight",
+            "Art. 15": "Accuracy, robustness and cybersecurity"
         },
-        "penalties": "Até 7% do faturamento anual global"
+        "penalties": "Up to 7% of global annual turnover"
     },
     ComplianceFramework.LGPD_BRAZIL: {
-        "name": "LGPD Brasil",
-        "description": "Lei Geral de Proteção de Dados do Brasil",
+        "name": "LGPD Brazil",
+        "description": "Brazilian General Data Protection Law",
         "articles": {
-            "Art. 5": "Definições de dados pessoais",
-            "Art. 6": "Atividades de tratamento de dados",
-            "Art. 7": "Bases legais para tratamento",
-            "Art. 8": "Consentimento",
-            "Art. 9": "Dados sensíveis",
-            "Art. 18": "Direitos do titular",
-            "Art. 46": "Agentes de tratamento",
-            "Art. 48": "Comunicação de incidente de segurança"
+            "Art. 5": "Definitions of personal data",
+            "Art. 6": "Data processing activities",
+            "Art. 7": "Legal bases for processing",
+            "Art. 8": "Consent",
+            "Art. 9": "Sensitive data",
+            "Art. 18": "Data subject rights",
+            "Art. 46": "Processing agents",
+            "Art. 48": "Security incident communication"
         },
-        "penalties": "Até R$ 50 milhões por infração"
+        "penalties": "Up to R$ 50 million per infraction"
+    },
+    ComplianceFramework.GDPR_EU: {
+        "name": "GDPR Europe",
+        "description": "General Data Protection Regulation of Europe",
+        "articles": {
+            "Art. 6": "Lawfulness of processing",
+            "Art. 7": "Conditions for consent",
+            "Art. 25": "Data protection by design and by default",
+            "Art. 32": "Security of processing",
+            "Art. 35": "Data protection impact assessment"
+        },
+        "penalties": "Up to 4% of global annual turnover (€20M maximum)"
+    },
+    ComplianceFramework.SOX_US: {
+        "name": "SOX United States",
+        "description": "Sarbanes-Oxley Act of 2002",
+        "articles": {
+            "Sec. 302": "Corporate responsibility for financial reports",
+            "Sec. 404": "Management assessment of internal controls",
+            "Sec. 409": "Real-time issuer disclosures",
+            "Sec. 906": "Criminal penalties for altering documents"
+        },
+        "penalties": "Fines up to $5M + imprisonment"
+    },
+    ComplianceFramework.BASEL_III: {
+        "name": "Basel III",
+        "description": "International regulatory framework for banks",
+        "articles": {
+            "Pillar 1": "Minimum capital requirements",
+            "Pillar 2": "Supervisory review process",
+            "Pillar 3": "Market discipline",
+            "Operational risk management": "Operational risk management principles"
+        },
+        "penalties": "Regulatory sanctions + license revocation"
+    },
+    ComplianceFramework.PCI_DSS: {
+        "name": "PCI DSS",
+        "description": "Payment Card Industry Data Security Standard",
+        "articles": {
+            "Req. 1": "Install and maintain a firewall configuration to protect cardholder data",
+            "Req. 2": "Do not use vendor-supplied defaults for system passwords and other security parameters",
+            "Req. 3": "Protect stored cardholder data",
+            "Req. 4": "Encrypt transmission of cardholder data across open, public networks",
+            "Req. 6": "Develop and maintain secure systems and applications",
+            "Req. 8": "Identify and authenticate access to system components"
+        },
+        "penalties": "Fines of $50K-$500K per month"
     }
 }
 
 class EnterpriseCodeAnalyzer:
-    """Analisador Enterprise com IA Obrigatória"""
-    
+    """Enterprise Analyzer with Mandatory AI"""
+
     def __init__(self, openai_client: OpenAI):
         self.client = openai_client
         self.analysis_cache = {}
-        
+
     async def analyze_system_enterprise(self, uploaded_files) -> Dict:
-        """Análise Enterprise Completa"""
+        """Complete Enterprise Analysis"""
         if not uploaded_files:
-            return {"error": "Nenhum arquivo fornecido"}
-        
-        # Fase 1: Análise básica dos arquivos
+            return {"error": "No files provided"}
+
+        # Phase 1: Basic file analysis
         files_data = []
         total_lines = 0
-        
+
         progress_placeholder = st.empty()
-        
+
         for i, uploaded_file in enumerate(uploaded_files):
-            progress_placeholder.text(f"📖 Analisando {uploaded_file.name}... ({i+1}/{len(uploaded_files)})")
-            
+            progress_placeholder.text(f"📖 Analyzing {uploaded_file.name}... ({i+1}/{len(uploaded_files)})")
+
             try:
                 content = self._read_file_content(uploaded_file)
                 if content:
@@ -412,30 +413,30 @@ class EnterpriseCodeAnalyzer:
                     files_data.append(file_analysis)
                     total_lines += file_analysis.get('lines_count', 0)
             except Exception as e:
-                st.warning(f"⚠️ Erro ao processar {uploaded_file.name}: {str(e)}")
+                st.warning(f"⚠️ Error processing {uploaded_file.name}: {str(e)}")
                 continue
-        
+
         if not files_data:
-            return {"error": "Nenhum arquivo válido para análise"}
-        
-        # Fase 2: Análise de Sistema Completa com IA
-        progress_placeholder.text("🤖 Executando análise semântica com IA...")
+            return {"error": "No valid files for analysis"}
+
+        # Phase 2: Complete System Analysis with AI
+        progress_placeholder.text("🤖 Performing semantic analysis with AI...")
         system_analysis = await self._ai_system_analysis(files_data)
-        
-        # Fase 3: Análise de Compliance
-        progress_placeholder.text("⚖️ Verificando conformidade regulatória...")
+
+        # Phase 3: Compliance Analysis
+        progress_placeholder.text("⚖️ Verifying regulatory compliance...")
         compliance_analysis = await self._compliance_analysis(files_data, system_analysis)
-        
-        # Fase 4: Análise Cruzada Enterprise
-        progress_placeholder.text("🔗 Análise cruzada e arquitetural...")
+
+        # Phase 4: Enterprise Cross-Analysis
+        progress_placeholder.text("🔗 Cross-analysis and architectural analysis...")
         cross_analysis = await self._enterprise_cross_analysis(files_data, system_analysis)
-        
-        # Fase 5: Score Enterprise Final
-        progress_placeholder.text("📊 Calculando score enterprise...")
+
+        # Phase 5: Final Enterprise Score
+        progress_placeholder.text("📊 Calculating enterprise score...")
         enterprise_score = self._calculate_enterprise_score(files_data, system_analysis, compliance_analysis, cross_analysis)
-        
-        progress_placeholder.text("✅ Análise enterprise concluída!")
-        
+
+        progress_placeholder.text("✅ Enterprise analysis completed!")
+
         return {
             "analysis_type": "Enterprise AI-Powered Analysis",
             "files_analyzed": len(files_data),
@@ -451,47 +452,47 @@ class EnterpriseCodeAnalyzer:
             "ai_model_used": "gpt-4o-mini",
             "compliance_frameworks_checked": len(COMPLIANCE_REQUIREMENTS)
         }
-    
+
     def _read_file_content(self, uploaded_file) -> str:
-        """Lê conteúdo do arquivo com encoding robusto"""
+        """Reads file content with robust encoding"""
         try:
             uploaded_file.seek(0)
             content = uploaded_file.read()
-            
-            # Tentar múltiplas codificações
+
+            # Try multiple encodings
             for encoding in ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']:
                 try:
                     return content.decode(encoding)
                 except UnicodeDecodeError:
                     continue
-            
-            # Fallback para análise binária
+
+            # Fallback to binary analysis
             return str(content)
         except Exception as e:
-            st.error(f"Erro crítico ao ler {uploaded_file.name}: {str(e)}")
+            st.error(f"Critical error reading {uploaded_file.name}: {str(e)}")
             return ""
-    
+
     async def _analyze_single_file_enterprise(self, filename: str, content: str) -> Dict:
-        """Análise Enterprise de arquivo individual com IA"""
-        
-        # Informações básicas
+        """Enterprise analysis of individual file with AI"""
+
+        # Basic information
         lines = content.split('\n')
         lines_count = len(lines)
         char_count = len(content)
         file_ext = os.path.splitext(filename.lower())[1][1:]
-        
-        # Classificação técnica com IA
+
+        # Technical classification with AI
         classification = await self._ai_classify_file(filename, content)
-        
-        # Detecção de riscos enterprise
+
+        # Enterprise risk detection
         risk_assessments = await self._detect_enterprise_risks(content, filename)
-        
-        # Análise de segurança profunda
+
+        # Deep security analysis
         security_analysis = await self._deep_security_analysis(content, filename)
-        
-        # Score do arquivo
+
+        # File score
         file_score = self._calculate_file_enterprise_score(risk_assessments, security_analysis, content)
-        
+
         return {
             "filename": filename,
             "file_type": self._get_file_type(file_ext),
@@ -506,26 +507,26 @@ class EnterpriseCodeAnalyzer:
             "critical_code_blocks": self._extract_critical_blocks(lines),
             "ai_insights": await self._ai_code_insights(content, filename)
         }
-    
+
     async def _ai_classify_file(self, filename: str, content: str) -> Dict:
-        """Classificação inteligente de arquivo com IA"""
-        
+        """Intelligent file classification with AI"""
+
         prompt = f"""
-        Analise este arquivo de código e classifique sua função no sistema:
-        
-        Nome: {filename}
-        Conteúdo (primeiras 500 chars): {content[:500]}
-        
-        Retorne um JSON com:
-        - category: tipo principal (security, api, data, config, ui, business_logic, testing, infrastructure)
-        - purpose: descrição específica da função
-        - criticality: nível de criticidade (critical, high, medium, low)
-        - architectural_role: papel na arquitetura
-        - security_relevance: relevância para segurança (0-10)
-        
-        Seja específico e técnico.
+        Analyze this code file and classify its function in the system:
+
+        Name: {filename}
+        Content (first 500 chars): {content[:500]}
+
+        Return a JSON with:
+        - category: main type (security, api, data, config, ui, business_logic, testing, infrastructure)
+        - purpose: specific function description
+        - criticality: criticality level (critical, high, medium, low)
+        - architectural_role: role in the architecture
+        - security_relevance: relevance to security (0-10)
+
+        Be specific and technical.
         """
-        
+
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -533,64 +534,64 @@ class EnterpriseCodeAnalyzer:
                 max_tokens=300,
                 temperature=0.1
             )
-            
+
             result = json.loads(response.choices[0].message.content)
             return result
-            
+
         except Exception as e:
-            # Fallback para classificação básica
+            # Fallback to basic classification
             return {
                 "category": self._basic_classification(filename),
-                "purpose": "Análise básica - IA indisponível",
+                "purpose": "Basic analysis - AI unavailable",
                 "criticality": "medium",
                 "architectural_role": "unknown",
                 "security_relevance": 5,
                 "error": str(e)
             }
-    
+
     async def _detect_enterprise_risks(self, content: str, filename: str) -> List[RiskAssessment]:
-        """Detecção de riscos enterprise com análise de IA"""
-        
+        """Enterprise risk detection with AI analysis"""
+
         risk_assessments = []
         content_lower = content.lower()
-        
+
         for risk_id, risk_info in ENTERPRISE_AGENTIC_RISKS.items():
-            
-            # Análise com IA obrigatória
+
+            # Mandatory AI analysis
             ai_analysis = await self._ai_risk_analysis(content, filename, risk_info)
-            
-            # Detecção de padrões técnicos
+
+            # Technical pattern detection
             pattern_score = 0
             evidence = []
-            
+
             for pattern in risk_info["technical_patterns"]:
                 if pattern in content_lower:
                     pattern_score += 15
-                    evidence.append(f"Padrão detectado: {pattern}")
-            
-            # Indicadores de severidade
+                    evidence.append(f"Pattern detected: {pattern}")
+
+            # Severity indicators
             severity_score = 0
             for indicator in risk_info["severity_indicators"]:
                 if indicator in content_lower:
                     severity_score += 25
-                    evidence.append(f"Indicador crítico: {indicator}")
-            
-            # Score combinado (IA + Padrões)
+                    evidence.append(f"Critical indicator: {indicator}")
+
+            # Combined score (AI + Patterns)
             combined_score = (ai_analysis["score"] * 0.7) + (pattern_score * 0.2) + (severity_score * 0.1)
             combined_score = min(100, max(0, combined_score))
-            
-            # Impacto em Compliance
+
+            # Compliance Impact
             compliance_impact = {}
             for framework in risk_info["compliance_frameworks"]:
                 compliance_impact[framework] = await self._assess_compliance_impact(
                     framework, risk_info, ai_analysis
                 )
-            
-            # Criar assessment
+
+            # Create assessment
             assessment = RiskAssessment(
                 risk_id=risk_id,
-                name=risk_info["nome"],
-                category=risk_info["categoria"],
+                name=risk_info["name"],
+                category=risk_info["category"],
                 score=combined_score,
                 level=self._score_to_risk_level(combined_score),
                 evidence=evidence + ai_analysis["evidence"],
@@ -600,34 +601,34 @@ class EnterpriseCodeAnalyzer:
                 estimated_cost=self._estimate_remediation_cost(combined_score),
                 timeline=self._estimate_timeline(combined_score)
             )
-            
+
             risk_assessments.append(assessment)
-        
+
         return risk_assessments
-    
+
     async def _ai_risk_analysis(self, content: str, filename: str, risk_info: Dict) -> Dict:
-        """Análise específica de risco com IA"""
-        
+        """Specific risk analysis with AI"""
+
         prompt = f"""
-        Analise este código para o risco específico: {risk_info['nome']}
-        
-        Descrição do Risco: {risk_info['descricao']}
-        Categoria: {risk_info['categoria']}
-        Arquivo: {filename}
-        
-        Código (primeiras 1000 chars):
+        Analyze this code for the specific risk: {risk_info['name']}
+
+        Risk Description: {risk_info['description']}
+        Category: {risk_info['category']}
+        File: {filename}
+
+        Code (first 1000 chars):
         {content[:1000]}
-        
-        Retorne um JSON com:
-        - score: pontuação de risco 0-100
-        - evidence: lista de evidências específicas encontradas
-        - technical_details: detalhes técnicos do problema
-        - recommendations: recomendações específicas
-        - severity_justification: justificativa da severidade
-        
-        Seja técnico e específico.
+
+        Return a JSON with:
+        - score: risk score 0-100
+        - evidence: list of specific evidence found
+        - technical_details: technical details of the problem
+        - recommendations: specific recommendations
+        - severity_justification: severity justification
+
+        Be technical and specific.
         """
-        
+
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -635,43 +636,43 @@ class EnterpriseCodeAnalyzer:
                 max_tokens=500,
                 temperature=0.1
             )
-            
+
             return json.loads(response.choices[0].message.content)
-            
+
         except Exception as e:
             return {
                 "score": 30,
-                "evidence": ["Análise IA indisponível"],
+                "evidence": ["AI analysis unavailable"],
                 "technical_details": {"error": str(e)},
-                "recommendations": ["Verificar manualmente"],
-                "severity_justification": "Score padrão aplicado"
+                "recommendations": ["Manual verification"],
+                "severity_justification": "Default score applied"
             }
-    
+
     async def _deep_security_analysis(self, content: str, filename: str) -> Dict:
-        """Análise profunda de segurança com IA"""
-        
+        """Deep security analysis with AI"""
+
         prompt = f"""
-        Faça uma análise profunda de segurança deste código:
-        
-        Arquivo: {filename}
-        Código: {content[:2000]}
-        
-        Analise especificamente:
-        1. Vulnerabilidades de injeção (SQL, XSS, Command)
-        2. Falhas de autenticação e autorização
-        3. Exposição de dados sensíveis
-        4. Falhas de validação de entrada
-        5. Configurações inseguras
-        6. Falhas de logging e monitoramento
-        
-        Retorne JSON com:
-        - vulnerabilities: lista detalhada de vulnerabilidades
-        - security_score: score 0-100 (0=muito seguro, 100=muito inseguro)
-        - critical_issues: problemas críticos imediatos
-        - recommendations: recomendações específicas de correção
-        - owasp_categories: categorias OWASP Top 10 aplicáveis
+        Perform a deep security analysis of this code:
+
+        File: {filename}
+        Code: {content[:2000]}
+
+        Specifically analyze:
+        1. Injection vulnerabilities (SQL, XSS, Command)
+        2. Authentication and authorization flaws
+        3. Sensitive data exposure
+        4. Input validation flaws
+        5. Insecure configurations
+        6. Logging and monitoring failures
+
+        Return JSON with:
+        - vulnerabilities: detailed list of vulnerabilities
+        - security_score: score 0-100 (0=very secure, 100=very insecure)
+        - critical_issues: immediate critical issues
+        - recommendations: specific remediation recommendations
+        - owasp_categories: applicable OWASP Top 10 categories
         """
-        
+
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -679,52 +680,52 @@ class EnterpriseCodeAnalyzer:
                 max_tokens=800,
                 temperature=0.1
             )
-            
+
             return json.loads(response.choices[0].message.content)
-            
+
         except Exception as e:
             return {
                 "vulnerabilities": [],
                 "security_score": 50,
                 "critical_issues": [],
-                "recommendations": ["Análise manual necessária"],
+                "recommendations": ["Manual analysis required"],
                 "owasp_categories": [],
                 "error": str(e)
             }
-    
+
     async def _ai_system_analysis(self, files_data: List[Dict]) -> Dict:
-        """Análise de sistema completo com IA"""
-        
-        # Preparar contexto do sistema
+        """Complete system analysis with AI"""
+
+        # Prepare system context
         system_context = {
             "total_files": len(files_data),
             "file_types": list(set(f["file_type"] for f in files_data)),
             "classifications": [f["classification"] for f in files_data],
             "total_lines": sum(f["lines_count"] for f in files_data)
         }
-        
+
         prompt = f"""
-        Analise este sistema de software completo:
-        
-        Contexto do Sistema:
-        - Total de arquivos: {system_context['total_files']}
-        - Tipos de arquivo: {system_context['file_types']}
-        - Total de linhas: {system_context['total_lines']}
-        
-        Classificações dos arquivos:
+        Analyze this complete software system:
+
+        System Context:
+        - Total files: {system_context['total_files']}
+        - File types: {system_context['file_types']}
+        - Total lines: {system_context['total_lines']}
+
+        File classifications:
         {json.dumps(system_context['classifications'][:10], indent=2)}
-        
-        Forneça uma análise arquitetural completa em JSON:
-        - architecture_assessment: avaliação da arquitetura
-        - security_posture: postura geral de segurança  
-        - scalability_analysis: análise de escalabilidade
-        - maintainability_score: score de manutenibilidade 0-100
-        - technical_debt_level: nível de débito técnico
-        - deployment_readiness: prontidão para produção
-        - risk_hotspots: áreas de maior risco
-        - strategic_recommendations: recomendações estratégicas
+
+        Provide a complete architectural analysis in JSON:
+        - architecture_assessment: architecture assessment
+        - security_posture: overall security posture
+        - scalability_analysis: scalability analysis
+        - maintainability_score: maintainability score 0-100
+        - technical_debt_level: technical debt level
+        - deployment_readiness: production readiness
+        - risk_hotspots: highest risk areas
+        - strategic_recommendations: strategic recommendations
         """
-        
+
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -732,14 +733,14 @@ class EnterpriseCodeAnalyzer:
                 max_tokens=1000,
                 temperature=0.2
             )
-            
+
             return json.loads(response.choices[0].message.content)
-            
+
         except Exception as e:
             return {
-                "architecture_assessment": "Análise IA indisponível",
-                "security_posture": "Requer análise manual",
-                "scalability_analysis": "Não avaliado",
+                "architecture_assessment": "AI analysis unavailable",
+                "security_posture": "Requires manual analysis",
+                "scalability_analysis": "Not evaluated",
                 "maintainability_score": 50,
                 "technical_debt_level": "Medium",
                 "deployment_readiness": "Requires assessment",
@@ -747,23 +748,23 @@ class EnterpriseCodeAnalyzer:
                 "strategic_recommendations": ["Enable AI analysis"],
                 "error": str(e)
             }
-    
+
     async def _compliance_analysis(self, files_data: List[Dict], system_analysis: Dict) -> Dict:
-        """Análise detalhada de compliance com múltiplos frameworks"""
-        
+        """Detailed compliance analysis with multiple frameworks"""
+
         compliance_violations = []
         framework_scores = {}
-        
+
         for framework, requirements in COMPLIANCE_REQUIREMENTS.items():
-            
-            # Análise específica por framework
+
+            # Specific analysis per framework
             violations = await self._analyze_framework_compliance(files_data, framework, requirements)
             compliance_violations.extend(violations)
-            
-            # Score por framework
+
+            # Score per framework
             framework_score = self._calculate_framework_score(violations)
             framework_scores[framework] = framework_score
-        
+
         return {
             "overall_compliance_score": sum(framework_scores.values()) / len(framework_scores),
             "framework_scores": framework_scores,
@@ -772,206 +773,206 @@ class EnterpriseCodeAnalyzer:
             "remediation_timeline": self._estimate_compliance_timeline(compliance_violations),
             "penalty_risk_assessment": self._assess_penalty_risks(compliance_violations)
         }
-    
+
     async def _analyze_framework_compliance(self, files_data: List[Dict], framework: ComplianceFramework, requirements: Dict) -> List[ComplianceViolation]:
-        """Análise de compliance para framework específico"""
-        
+        """Compliance analysis for specific framework"""
+
         violations = []
-        
-        # Análise com IA para compliance
+
+        # AI compliance analysis
         for file_data in files_data:
             ai_compliance = await self._ai_compliance_check(file_data, framework, requirements)
-            
+
             for violation_data in ai_compliance.get("violations", []):
                 violation = ComplianceViolation(
                     framework=framework,
-                    article=violation_data.get("article", "Não especificado"),
+                    article=violation_data.get("article", "Not specified"),
                     description=violation_data.get("description", ""),
                     severity=RiskLevel(violation_data.get("severity", "MEDIUM")),
                     evidence=violation_data.get("evidence", []),
                     remediation=violation_data.get("remediation", []),
-                    penalty_risk=violation_data.get("penalty_risk", "Baixo")
+                    penalty_risk=violation_data.get("penalty_risk", "Low")
                 )
                 violations.append(violation)
-        
+
         return violations
-    
+
     async def _ai_compliance_check(self, file_data: Dict, framework: ComplianceFramework, requirements: Dict) -> Dict:
-        """Verificação DETALHADA de compliance com IA - Implementação Completa"""
-        
+        """DETAILED compliance check with AI - Complete Implementation"""
+
         content_preview = file_data.get("content_preview", "")
         filename = file_data.get("filename", "")
         file_type = file_data.get("file_type", "Unknown")
-        
-        # Análise específica e detalhada por framework
+
+        # Specific and detailed analysis by framework
         if framework == ComplianceFramework.EU_AI_ACT:
             prompt = f"""
-            ANÁLISE ESPECÍFICA EU AI ACT - {filename} ({file_type})
-            
-            Código a analisar:
+            SPECIFIC EU AI ACT ANALYSIS - {filename} ({file_type})
+
+            Code to analyze:
             {content_preview[:1500]}
-            
-            Verifique ESPECIFICAMENTE cada artigo:
-            
-            🔍 Art. 6 - SISTEMAS DE IA DE ALTO RISCO:
-            - Este código implementa sistema de IA que pode afetar decisões financeiras/creditícias?
-            - Há processamento automatizado de dados pessoais para decisões críticas?
-            
-            🔍 Art. 8 - CONFORMIDADE DE SISTEMAS DE ALTO RISCO:  
-            - Existe sistema de gestão da qualidade implementado?
-            - Há documentação técnica adequada?
-            
-            🔍 Art. 9 - SISTEMA DE GESTÃO DE RISCO:
-            - Há identificação e análise de riscos conhecidos?
-            - Existe processo de mitigação de riscos implementado?
-            
-            🔍 Art. 13 - TRANSPARÊNCIA:
-            - O sistema informa aos usuários que estão interagindo com IA?
-            - Há explicações claras sobre como o sistema funciona?
-            
-            🔍 Art. 14 - SUPERVISÃO HUMANA:
-            - Existe supervisão humana efetiva implementada?
-            - Humanos podem intervir nas decisões do sistema?
-            
-            🔍 Art. 15 - PRECISÃO E ROBUSTEZ:
-            - Há validação de dados de entrada?
-            - Existe tratamento de erros e falhas?
-            
-            RETORNE JSON EXATO:
+
+            Specifically check each article:
+
+            🔍 Art. 6 - HIGH-RISK AI SYSTEMS:
+            - Does this code implement an AI system that can affect financial/credit decisions?
+            - Is there automated processing of personal data for critical decisions?
+
+            🔍 Art. 8 - CONFORMITY OF HIGH-RISK SYSTEMS:
+            - Is a quality management system implemented?
+            - Is there adequate technical documentation?
+
+            🔍 Art. 9 - RISK MANAGEMENT SYSTEM:
+            - Is there identification and analysis of known risks?
+            - Is a risk mitigation process implemented?
+
+            🔍 Art. 13 - TRANSPARENCY:
+            - Does the system inform users that they are interacting with AI?
+            - Are there clear explanations of how the system works?
+
+            🔍 Art. 14 - HUMAN OVERSIGHT:
+            - Is effective human oversight implemented?
+            - Can humans intervene in system decisions?
+
+            🔍 Art. 15 - ACCURACY AND ROBUSTNESS:
+            - Is there input data validation?
+            - Is there error and failure handling?
+
+            RETURN EXACT JSON:
             {{
                 "violations": [
                     {{
                         "article": "Art. X",
-                        "description": "descrição específica da violação",
-                        "severity": "HIGH/MEDIUM/LOW", 
-                        "evidence": ["evidência específica no código"],
-                        "remediation": ["ação específica necessária"],
-                        "penalty_risk": "Até 7% do faturamento anual (€35M máximo)"
+                        "description": "specific violation description",
+                        "severity": "HIGH/MEDIUM/LOW",
+                        "evidence": ["specific evidence in code"],
+                        "remediation": ["specific action needed"],
+                        "penalty_risk": "Up to 7% of annual turnover (€35M maximum)"
                     }}
                 ],
                 "compliance_score": 0-100,
                 "specific_articles_violated": ["Art. X", "Art. Y"],
-                "recommendations": ["recomendação específica técnica"]
+                "recommendations": ["specific technical recommendation"]
             }}
             """
-        
+
         elif framework == ComplianceFramework.LGPD_BRAZIL:
             prompt = f"""
-            ANÁLISE ESPECÍFICA LGPD BRASIL - {filename} ({file_type})
-            
-            Código a analisar:
+            SPECIFIC LGPD BRAZIL ANALYSIS - {filename} ({file_type})
+
+            Code to analyze:
             {content_preview[:1500]}
-            
-            Verifique ESPECIFICAMENTE cada artigo:
-            
-            🔍 Art. 5 - DADOS PESSOAIS:
-            - O código processa informações que identifiquem pessoa natural?
-            - Há tratamento de dados sensíveis (origem racial, saúde, etc.)?
-            
-            🔍 Art. 7 - BASES LEGAIS:
-            - Há base legal clara para o tratamento (consentimento, contrato, etc.)?
-            - O tratamento é necessário para finalidade específica?
-            
-            🔍 Art. 8 - CONSENTIMENTO:
-            - Quando necessário, há obtenção de consentimento livre e informado?
-            - O consentimento pode ser revogado facilmente?
-            
-            🔍 Art. 9 - DADOS SENSÍVEIS:
-            - Há tratamento de dados sensíveis sem consentimento específico?
-            - Existe proteção adicional para dados sensíveis?
-            
-            🔍 Art. 18 - DIREITOS DO TITULAR:
-            - Há implementação dos direitos (acesso, correção, eliminação)?
-            - Existe processo para atender solicitações dos titulares?
-            
-            🔍 Art. 46 - AGENTES DE TRATAMENTO:
-            - Há definição clara de controlador e operador?
-            - Existe DPO (Data Protection Officer) quando necessário?
-            
-            RETORNE JSON EXATO:
+
+            Specifically check each article:
+
+            🔍 Art. 5 - PERSONAL DATA:
+            - Does the code process information that identifies a natural person?
+            - Is there processing of sensitive data (racial origin, health, etc.)?
+
+            🔍 Art. 7 - LEGAL BASES:
+            - Is there a clear legal basis for processing (consent, contract, etc.)?
+            - Is the processing necessary for a specific purpose?
+
+            🔍 Art. 8 - CONSENT:
+            - When necessary, is free and informed consent obtained?
+            - Can consent be easily revoked?
+
+            🔍 Art. 9 - SENSITIVE DATA:
+            - Is sensitive data processed without specific consent?
+            - Is there additional protection for sensitive data?
+
+            🔍 Art. 18 - DATA SUBJECT RIGHTS:
+            - Are data subject rights implemented (access, correction, deletion)?
+            - Is there a process to fulfill data subject requests?
+
+            🔍 Art. 46 - PROCESSING AGENTS:
+            - Is there a clear definition of controller and processor?
+            - Is a DPO (Data Protection Officer) in place when necessary?
+
+            RETURN EXACT JSON:
             {{
                 "violations": [
                     {{
                         "article": "Art. X",
-                        "description": "descrição específica da violação",
+                        "description": "specific violation description",
                         "severity": "HIGH/MEDIUM/LOW",
-                        "evidence": ["evidência específica no código"], 
-                        "remediation": ["ação específica necessária"],
-                        "penalty_risk": "Até R$ 50 milhões por infração"
+                        "evidence": ["specific evidence in code"],
+                        "remediation": ["specific action needed"],
+                        "penalty_risk": "Up to R$ 50 million per infraction"
                     }}
                 ],
                 "compliance_score": 0-100,
                 "specific_articles_violated": ["Art. X", "Art. Y"],
-                "recommendations": ["recomendação específica técnica"]
+                "recommendations": ["specific technical recommendation"]
             }}
             """
-        
+
         elif framework == ComplianceFramework.GDPR_EU:
             prompt = f"""
-            ANÁLISE ESPECÍFICA GDPR - {filename} ({file_type})
-            
-            Verifique artigos específicos:
-            - Art. 6: Base legal para processamento
-            - Art. 7: Condições para consentimento  
+            SPECIFIC GDPR ANALYSIS - {filename} ({file_type})
+
+            Check specific articles:
+            - Art. 6: Lawfulness of processing
+            - Art. 7: Conditions for consent
             - Art. 25: Data protection by design
-            - Art. 32: Segurança no processamento
-            - Art. 35: Avaliação de impacto
-            
-            Código: {content_preview[:1500]}
-            
-            RETORNE JSON com violations específicas, penalty_risk: "Até 4% do faturamento anual (€20M máximo)"
+            - Art. 32: Security of processing
+            - Art. 35: Impact assessment
+
+            Code: {content_preview[:1500]}
+
+            RETURN JSON with specific violations, penalty_risk: "Up to 4% of annual turnover (€20M maximum)"
             """
-        
+
         elif framework == ComplianceFramework.SOX_US:
             prompt = f"""
-            ANÁLISE ESPECÍFICA SOX (Sarbanes-Oxley) - {filename} ({file_type})
-            
-            Verifique seções específicas:
-            - Seção 302: Responsabilidade executiva
-            - Seção 404: Controles internos
-            - Seção 409: Divulgação em tempo real
-            - Seção 906: Responsabilidade criminal
-            
-            Código: {content_preview[:1500]}
-            
-            RETORNE JSON com violations específicas, penalty_risk: "Multas de até $5M + prisão"
+            SPECIFIC SOX (Sarbanes-Oxley) ANALYSIS - {filename} ({file_type})
+
+            Check specific sections:
+            - Section 302: Executive responsibility
+            - Section 404: Internal controls
+            - Section 409: Real-time disclosure
+            - Section 906: Criminal liability
+
+            Code: {content_preview[:1500]}
+
+            RETURN JSON with specific violations, penalty_risk: "Fines up to $5M + imprisonment"
             """
-        
+
         elif framework == ComplianceFramework.BASEL_III:
             prompt = f"""
-            ANÁLISE ESPECÍFICA BASEL III - {filename} ({file_type})
-            
-            Verifique pilares específicos:
-            - Pilar 1: Requisitos mínimos de capital
-            - Pilar 2: Processo de supervisão
-            - Pilar 3: Disciplina de mercado
-            - Gestão de risco operacional
-            
-            Código: {content_preview[:1500]}
-            
-            RETORNE JSON com violations específicas, penalty_risk: "Sanções regulatórias + perda de licença"
+            SPECIFIC BASEL III ANALYSIS - {filename} ({file_type})
+
+            Check specific pillars:
+            - Pillar 1: Minimum capital requirements
+            - Pillar 2: Supervisory process
+            - Pillar 3: Market discipline
+            - Operational risk management
+
+            Code: {content_preview[:1500]}
+
+            RETURN JSON with specific violations, penalty_risk: "Regulatory sanctions + license revocation"
             """
-        
+
         elif framework == ComplianceFramework.PCI_DSS:
             prompt = f"""
-            ANÁLISE ESPECÍFICA PCI DSS - {filename} ({file_type})
-            
-            Verifique requisitos específicos:
-            - Req. 1: Firewall e configuração de rede
-            - Req. 2: Senhas padrão e parâmetros de segurança
-            - Req. 3: Proteção de dados do portador do cartão
-            - Req. 4: Criptografia na transmissão
-            - Req. 6: Desenvolvimento seguro
-            - Req. 8: Identificação única para acesso
-            
-            Código: {content_preview[:1500]}
-            
-            RETORNE JSON com violations específicas, penalty_risk: "Multas de $50K-$500K por mês"
+            SPECIFIC PCI DSS ANALYSIS - {filename} ({file_type})
+
+            Check specific requirements:
+            - Req. 1: Firewall and network configuration
+            - Req. 2: Default passwords and security parameters
+            - Req. 3: Cardholder data protection
+            - Req. 4: Encryption in transmission
+            - Req. 6: Secure development
+            - Req. 8: Unique identification for access
+
+            Code: {content_preview[:1500]}
+
+            RETURN JSON with specific violations, penalty_risk: "Fines of $50K-$500K per month"
             """
-        
+
         else:
-            prompt = f"Análise genérica de compliance para {framework.value} - arquivo {filename}"
-        
+            prompt = f"Generic compliance analysis for {framework.value} - file {filename}"
+
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -979,10 +980,10 @@ class EnterpriseCodeAnalyzer:
                 max_tokens=800,
                 temperature=0.1
             )
-            
+
             result = json.loads(response.choices[0].message.content)
-            
-            # Garantir estrutura padrão
+
+            # Ensure standard structure
             if "violations" not in result:
                 result["violations"] = []
             if "compliance_score" not in result:
@@ -991,103 +992,103 @@ class EnterpriseCodeAnalyzer:
                 result["specific_articles_violated"] = []
             if "recommendations" not in result:
                 result["recommendations"] = []
-            
+
             return result
-            
+
         except Exception as e:
-            # Fallback com análise básica real
+            # Fallback with real basic analysis
             violations = self._basic_compliance_analysis(content_preview, framework, filename)
-            
+
             return {
                 "violations": violations,
                 "compliance_score": max(0, 80 - len(violations) * 15),
                 "specific_articles_violated": [v["article"] for v in violations],
-                "recommendations": [f"Revisar {framework.value} manualmente"],
+                "recommendations": [f"Manually review {framework.value}"],
                 "error": str(e)
             }
-    
+
     def _basic_compliance_analysis(self, content: str, framework: ComplianceFramework, filename: str) -> List[Dict]:
-        """Análise básica de compliance quando IA falha"""
-        
+        """Basic compliance analysis when AI fails"""
+
         violations = []
         content_lower = content.lower()
-        
+
         if framework == ComplianceFramework.EU_AI_ACT:
-            # Verificações específicas do AI Act
+            # Specific AI Act checks
             if any(term in content_lower for term in ['decision', 'predict', 'classify', 'recommend']):
                 if 'human' not in content_lower and 'approval' not in content_lower:
                     violations.append({
                         "article": "Art. 14",
-                        "description": "Sistema de IA sem supervisão humana adequada detectado",
+                        "description": "AI system without adequate human oversight detected",
                         "severity": "HIGH",
-                        "evidence": [f"Decisões automatizadas em {filename}"],
-                        "remediation": ["Implementar supervisão humana", "Adicionar aprovação manual"],
-                        "penalty_risk": "Até 7% do faturamento anual (€35M máximo)"
+                        "evidence": [f"Automated decisions in {filename}"],
+                        "remediation": ["Implement human oversight", "Add manual approval"],
+                        "penalty_risk": "Up to 7% of global annual turnover (€35M maximum)"
                     })
-            
+
             if 'transparent' not in content_lower and 'explain' not in content_lower:
                 violations.append({
-                    "article": "Art. 13", 
-                    "description": "Falta de transparência no sistema de IA",
+                    "article": "Art. 13",
+                    "description": "Lack of transparency in the AI system",
                     "severity": "MEDIUM",
-                    "evidence": [f"Ausência de explicabilidade em {filename}"],
-                    "remediation": ["Implementar explicabilidade", "Adicionar logs de decisão"],
-                    "penalty_risk": "Até 7% do faturamento anual (€35M máximo)"
+                    "evidence": [f"Lack of explainability in {filename}"],
+                    "remediation": ["Implement explainability", "Add decision logs"],
+                    "penalty_risk": "Up to 7% of global annual turnover (€35M maximum)"
                 })
-        
+
         elif framework == ComplianceFramework.LGPD_BRAZIL:
-            # Verificações específicas da LGPD
+            # Specific LGPD checks
             if any(term in content_lower for term in ['cpf', 'email', 'phone', 'address', 'personal']):
                 if 'consent' not in content_lower and 'legal_basis' not in content_lower:
                     violations.append({
                         "article": "Art. 7",
-                        "description": "Tratamento de dados pessoais sem base legal clara",
-                        "severity": "HIGH", 
-                        "evidence": [f"Dados pessoais processados em {filename}"],
-                        "remediation": ["Definir base legal", "Implementar consentimento"],
-                        "penalty_risk": "Até R$ 50 milhões por infração"
+                        "description": "Processing of personal data without clear legal basis",
+                        "severity": "HIGH",
+                        "evidence": [f"Personal data processed in {filename}"],
+                        "remediation": ["Define legal basis", "Implement consent"],
+                        "penalty_risk": "Up to R$ 50 million per infraction"
                     })
-            
+
             if any(term in content_lower for term in ['health', 'race', 'religion', 'biometric']):
                 violations.append({
                     "article": "Art. 9",
-                    "description": "Possível tratamento de dados sensíveis detectado",
+                    "description": "Possible processing of sensitive data detected",
                     "severity": "HIGH",
-                    "evidence": [f"Indícios de dados sensíveis em {filename}"],
-                    "remediation": ["Implementar proteções especiais", "Obter consentimento específico"],
-                    "penalty_risk": "Até R$ 50 milhões por infração"
+                    "evidence": [f"Indications of sensitive data in {filename}"],
+                    "remediation": ["Implement special protections", "Obtain specific consent"],
+                    "penalty_risk": "Up to R$ 50 million per infraction"
                 })
-        
+
         elif framework == ComplianceFramework.PCI_DSS:
-            # Verificações específicas PCI DSS
+            # Specific PCI DSS checks
             if any(term in content_lower for term in ['card', 'credit', 'payment', 'pan']):
                 if 'encrypt' not in content_lower and 'hash' not in content_lower:
                     violations.append({
                         "article": "Req. 3",
-                        "description": "Dados de cartão sem proteção criptográfica adequada",
+                        "description": "Card data without adequate cryptographic protection",
                         "severity": "HIGH",
-                        "evidence": [f"Dados de pagamento não criptografados em {filename}"],
-                        "remediation": ["Implementar criptografia", "Aplicar tokenização"],
-                        "penalty_risk": "Multas de $50K-$500K por mês"
+                        "evidence": [f"Unencrypted payment data in {filename}"],
+                        "remediation": ["Implement encryption", "Apply tokenization"],
+                        "penalty_risk": "Fines of $50K-$500K per month"
                     })
-        
+
         return violations
-    
+
     async def _enterprise_cross_analysis(self, files_data: List[Dict], system_analysis: Dict) -> Dict:
-        """Análise cruzada enterprise entre arquivos"""
-        
-        # Análise de dependências
+        """Enterprise cross-file analysis"""
+
+        # Dependency analysis
         dependency_risks = await self._analyze_dependencies(files_data)
-        
-        # Análise de comunicação entre componentes
+
+        # Component communication analysis
         integration_risks = await self._analyze_integrations(files_data)
-        
-        # Análise de arquitetura de segurança
+
+        # Security architecture analysis
         security_architecture = await self._analyze_security_architecture(files_data)
-        
+
         # Single points of failure
         spof_analysis = self._identify_single_points_failure(files_data)
-        
+
         return {
             "dependency_risks": dependency_risks,
             "integration_risks": integration_risks,
@@ -1096,64 +1097,64 @@ class EnterpriseCodeAnalyzer:
             "system_complexity_score": self._calculate_complexity_score(files_data),
             "architectural_recommendations": await self._ai_architectural_recommendations(files_data, system_analysis)
         }
-    
+
     async def _analyze_dependencies(self, files_data: List[Dict]) -> List[Dict]:
-        """Análise de riscos de dependências"""
-        
+        """Dependency risk analysis"""
+
         dependency_risks = []
-        
+
         for file_data in files_data:
             content = file_data.get("content_preview", "")
-            
-            # Buscar imports e dependências
+
+            # Search for imports and dependencies
             import_patterns = [
                 r"import\s+(\w+)",
                 r"from\s+(\w+)\s+import",
                 r"require\s*\(['\"]([^'\"]+)['\"]\)",
                 r"@import\s+['\"]([^'\"]+)['\"]"
             ]
-            
+
             dependencies = []
             for pattern in import_patterns:
                 matches = re.findall(pattern, content, re.IGNORECASE)
                 dependencies.extend(matches)
-            
+
             if dependencies:
-                # Análise com IA das dependências
+                # AI analysis of dependencies
                 ai_dep_analysis = await self._ai_dependency_analysis(dependencies, file_data["filename"])
-                
+
                 dependency_risks.append({
                     "file": file_data["filename"],
-                    "dependencies": dependencies[:10],  # Limitar para não sobrecarregar
+                    "dependencies": dependencies[:10],  # Limit to avoid overloading
                     "risk_score": ai_dep_analysis.get("risk_score", 30),
                     "critical_dependencies": ai_dep_analysis.get("critical_dependencies", []),
                     "recommendations": ai_dep_analysis.get("recommendations", [])
                 })
-        
+
         return dependency_risks
-    
+
     async def _ai_dependency_analysis(self, dependencies: List[str], filename: str) -> Dict:
-        """Análise de dependências com IA"""
-        
+        """Dependency analysis with AI"""
+
         prompt = f"""
-        Analise estas dependências do arquivo {filename}:
-        
-        Dependências: {dependencies[:20]}
-        
-        Avalie os riscos:
-        1. Dependências desatualizadas conhecidas
-        2. Bibliotecas com vulnerabilidades
-        3. Dependências não mantidas
-        4. Conflitos potenciais
-        5. Dependências desnecessárias
-        
-        Retorne JSON com:
+        Analyze these dependencies for file {filename}:
+
+        Dependencies: {dependencies[:20]}
+
+        Assess the risks:
+        1. Known outdated dependencies
+        2. Libraries with vulnerabilities
+        3. Unmaintained dependencies
+        4. Potential conflicts
+        5. Unnecessary dependencies
+
+        Return JSON with:
         - risk_score: 0-100
-        - critical_dependencies: lista de dependências críticas
-        - recommendations: recomendações específicas
-        - vulnerability_alerts: alertas de vulnerabilidade
+        - critical_dependencies: list of critical dependencies
+        - recommendations: specific recommendations
+        - vulnerability_alerts: vulnerability alerts
         """
-        
+
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -1161,50 +1162,50 @@ class EnterpriseCodeAnalyzer:
                 max_tokens=400,
                 temperature=0.1
             )
-            
+
             return json.loads(response.choices[0].message.content)
-            
+
         except Exception:
             return {
                 "risk_score": 30,
                 "critical_dependencies": [],
-                "recommendations": ["Verificar manualmente"],
+                "recommendations": ["Manual verification"],
                 "vulnerability_alerts": []
             }
-    
-    def _calculate_enterprise_score(self, files_data: List[Dict], system_analysis: Dict, 
-                                  compliance_analysis: Dict, cross_analysis: Dict) -> Dict:
-        """Cálculo do score enterprise final"""
-        
-        # Scores componentes
+
+    def _calculate_enterprise_score(self, files_data: List[Dict], system_analysis: Dict,
+                                    compliance_analysis: Dict, cross_analysis: Dict) -> Dict:
+        """Calculation of the final enterprise score"""
+
+        # Component scores
         avg_file_score = sum(f["file_score"] for f in files_data) / len(files_data) if files_data else 0
         system_score = system_analysis.get("maintainability_score", 50)
         compliance_score = compliance_analysis.get("overall_compliance_score", 70)
         architecture_score = 100 - cross_analysis.get("system_complexity_score", 30)
-        
-        # Peso dos componentes
+
+        # Component weights
         weights = {
             "files": 0.25,
             "system": 0.25,
-            "compliance": 0.35,  # Maior peso para compliance
+            "compliance": 0.35,  # Higher weight for compliance
             "architecture": 0.15
         }
-        
-        # Score final ponderado
+
+        # Weighted final score
         overall_score = (
             avg_file_score * weights["files"] +
             system_score * weights["system"] +
             compliance_score * weights["compliance"] +
             architecture_score * weights["architecture"]
         )
-        
-        # Penalidades críticas
+
+        # Critical penalties
         critical_violations = len(compliance_analysis.get("critical_violations", []))
         if critical_violations > 0:
-            overall_score += min(critical_violations * 15, 40)  # Penalidade máxima de 40 pontos
-        
+            overall_score += min(critical_violations * 15, 40)  # Max penalty of 40 points
+
         overall_score = min(100, max(0, overall_score))
-        
+
         return {
             "overall_score": round(overall_score, 1),
             "component_scores": {
@@ -1217,9 +1218,9 @@ class EnterpriseCodeAnalyzer:
             "risk_distribution": self._calculate_risk_distribution(files_data),
             "priority_actions": self._identify_priority_actions(compliance_analysis, cross_analysis)
         }
-    
+
     def _get_enterprise_risk_level(self, score: float) -> RiskLevel:
-        """Converte score em nível de risco enterprise"""
+        """Converts score to enterprise risk level"""
         if score >= 80:
             return RiskLevel.CRITICAL
         elif score >= 65:
@@ -1230,51 +1231,170 @@ class EnterpriseCodeAnalyzer:
             return RiskLevel.LOW
         else:
             return RiskLevel.MINIMAL
-    
+
     def _score_to_risk_level(self, score: float) -> RiskLevel:
-        """Converte score numérico para enum RiskLevel"""
+        """Converts numeric score to RiskLevel enum"""
         return self._get_enterprise_risk_level(score)
-    
+
     def _calculate_priority(self, score: float, compliance_impact: Dict) -> int:
-        """Calcula prioridade de remediação (1-5, sendo 1 mais urgente)"""
-        base_priority = 5 - int(score / 20)  # Score alto = prioridade alta
-        
-        # Ajustar por impacto em compliance
-        critical_frameworks = sum(1 for impact in compliance_impact.values() 
-                                if "critical" in impact.lower() or "high" in impact.lower())
-        
+        """Calculates remediation priority (1-5, 1 being most urgent)"""
+        base_priority = 5 - int(score / 20)  # High score = high priority
+
+        # Adjust by compliance impact
+        critical_frameworks = sum(1 for impact in compliance_impact.values()
+                                   if "critical" in impact.lower() or "high" in impact.lower())
+
         priority = max(1, base_priority - critical_frameworks)
         return min(5, priority)
-    
+
     def _estimate_remediation_cost(self, score: float) -> str:
-        """Estima custo de remediação"""
+        """Estimates remediation cost"""
         if score >= 80:
-            return "Alto (R$ 50k - R$ 200k)"
+            return "High (R$ 50k - R$ 200k)"
         elif score >= 65:
-            return "Médio-Alto (R$ 20k - R$ 50k)"
+            return "Medium-High (R$ 20k - R$ 50k)"
         elif score >= 40:
-            return "Médio (R$ 5k - R$ 20k)"
+            return "Medium (R$ 5k - R$ 20k)"
         elif score >= 20:
-            return "Baixo (R$ 1k - R$ 5k)"
+            return "Low (R$ 1k - R$ 5k)"
         else:
-            return "Mínimo (< R$ 1k)"
-    
+            return "Minimal (< R$ 1k)"
+
     def _estimate_timeline(self, score: float) -> str:
-        """Estima timeline de remediação"""
+        """Estimates remediation timeline"""
         if score >= 80:
-            return "Imediato (1-2 semanas)"
+            return "Immediate (1-2 weeks)"
         elif score >= 65:
-            return "Urgente (2-4 semanas)"
+            return "Urgent (2-4 weeks)"
         elif score >= 40:
-            return "Médio prazo (1-2 meses)"
+            return "Medium term (1-2 months)"
         elif score >= 20:
-            return "Longo prazo (2-3 meses)"
+            return "Long term (2-3 months)"
         else:
-            return "Planejado (3+ meses)"
-    
-    # Métodos auxiliares
+            return "Planned (3+ months)"
+
+    # Helper methods (placeholders as their implementation wasn't provided in the original code snippet)
+    def _calculate_file_enterprise_score(self, risk_assessments: List[RiskAssessment], security_analysis: Dict, content: str) -> float:
+        """Calculates the enterprise score for a single file."""
+        total_risk_score = sum(ra.score for ra in risk_assessments)
+        avg_risk_score = total_risk_score / len(risk_assessments) if risk_assessments else 0
+        security_score = 100 - security_analysis.get("security_score", 50) # Invert security score for consistency (0=very insecure, 100=very secure)
+
+        # Simple weighted average
+        file_score = (avg_risk_score * 0.6) + (security_score * 0.4)
+        return min(100, max(0, file_score))
+
+    def _extract_critical_blocks(self, lines: List[str]) -> List[str]:
+        """Extracts critical code blocks (placeholder)"""
+        # This would involve parsing code for critical functions, security-sensitive areas, etc.
+        # For simplicity, returning a placeholder.
+        return ["No critical blocks extracted (placeholder)"]
+
+    async def _ai_code_insights(self, content: str, filename: str) -> Dict:
+        """Generates AI-powered code insights (placeholder)"""
+        # This would involve calling the LLM to provide high-level insights about the code.
+        return {"summary": "AI insights unavailable (placeholder)", "key_findings": []}
+
+    async def _assess_compliance_impact(self, framework: ComplianceFramework, risk_info: Dict, ai_analysis: Dict) -> str:
+        """Assesses compliance impact (placeholder)"""
+        # This would involve detailed analysis of how the risk affects specific compliance articles.
+        return "Impact assessment unavailable (placeholder)"
+
+    def _calculate_framework_score(self, violations: List[ComplianceViolation]) -> float:
+        """Calculates compliance score for a framework (placeholder)"""
+        # A simple scoring: 100 - (number of high/critical violations * penalty)
+        critical_violations = sum(1 for v in violations if v.severity in [RiskLevel.CRITICAL, RiskLevel.HIGH])
+        score = max(0, 100 - (critical_violations * 20))
+        return score
+
+    def _estimate_compliance_timeline(self, violations: List[ComplianceViolation]) -> Dict:
+        """Estimates compliance remediation timeline (placeholder)"""
+        immediate = sum(1 for v in violations if v.severity == RiskLevel.CRITICAL)
+        short_term = sum(1 for v in violations if v.severity == RiskLevel.HIGH)
+        medium_term = sum(1 for v in violations if v.severity == RiskLevel.MEDIUM)
+        
+        total_time_estimate = "N/A"
+        if immediate > 0:
+            total_time_estimate = "1-2 weeks (urgent)"
+        elif short_term > 0:
+            total_time_estimate = "2-4 weeks"
+        elif medium_term > 0:
+            total_time_estimate = "1-3 months"
+        elif violations:
+            total_time_estimate = "3+ months"
+        
+        details = []
+        for v in violations:
+            timeline_str = "Immediate" if v.severity == RiskLevel.CRITICAL else \
+                           "Short Term" if v.severity == RiskLevel.HIGH else \
+                           "Medium Term" if v.severity == RiskLevel.MEDIUM else "Long Term"
+            details.append({
+                "violation": v.description,
+                "timeline": timeline_str,
+                "reason": "AI-detected issue",
+                "penalty_risk": v.penalty_risk
+            })
+        
+        return {
+            "immediate": immediate,
+            "short_term": short_term,
+            "medium_term": medium_term,
+            "estimated_total_time": total_time_estimate,
+            "details": details
+        }
+
+    def _assess_penalty_risks(self, violations: List[ComplianceViolation]) -> Dict:
+        """Assesses penalty risks (placeholder)"""
+        # Aggregate penalty risks from violations
+        risks = {}
+        for v in violations:
+            risks.setdefault(v.framework.value, []).append(v.penalty_risk)
+        return risks
+
+    async def _analyze_integrations(self, files_data: List[Dict]) -> List[Dict]:
+        """Analyzes integration risks (placeholder)"""
+        return []
+
+    async def _analyze_security_architecture(self, files_data: List[Dict]) -> Dict:
+        """Analyzes security architecture (placeholder)"""
+        return {}
+
+    def _identify_single_points_failure(self, files_data: List[Dict]) -> List[str]:
+        """Identifies single points of failure (placeholder)"""
+        return ["No SPOF identified (placeholder)"]
+
+    def _calculate_complexity_score(self, files_data: List[Dict]) -> float:
+        """Calculates system complexity score (placeholder)"""
+        return 30.0 # Default for now
+
+    async def _ai_architectural_recommendations(self, files_data: List[Dict], system_analysis: Dict) -> List[str]:
+        """Generates AI-powered architectural recommendations (placeholder)"""
+        return ["Implement microservices for better scalability", "Strengthen API security measures"]
+
+    def _calculate_risk_distribution(self, files_data: List[Dict]) -> Dict:
+        """Calculates risk distribution (placeholder)"""
+        distribution = {level.value: 0 for level in RiskLevel}
+        for file_data in files_data:
+            risk_level = file_data.get('risk_level')
+            if risk_level:
+                distribution[risk_level.value] += 1
+        return distribution
+
+    def _identify_priority_actions(self, compliance_analysis: Dict, cross_analysis: Dict) -> List[str]:
+        """Identifies priority actions (placeholder)"""
+        actions = []
+        critical_compliance = compliance_analysis.get('critical_violations', [])
+        if critical_compliance:
+            actions.append("Address critical compliance violations immediately.")
+        
+        spofs = cross_analysis.get('single_points_failure', [])
+        if spofs and spofs != ["No SPOF identified (placeholder)"]:
+            actions.append("Mitigate identified single points of failure.")
+            
+        return actions if actions else ["No urgent priority actions identified."]
+
     def _get_file_type(self, extension: str) -> str:
-        """Retorna tipo do arquivo baseado na extensão"""
+        """Returns file type based on extension"""
         type_map = {
             'py': 'Python', 'js': 'JavaScript', 'ts': 'TypeScript',
             'java': 'Java', 'cs': 'C#', 'php': 'PHP', 'rb': 'Ruby',
@@ -1284,11 +1404,11 @@ class EnterpriseCodeAnalyzer:
             'html': 'HTML', 'css': 'CSS', 'scss': 'SCSS'
         }
         return type_map.get(extension, 'Unknown')
-    
+
     def _basic_classification(self, filename: str) -> str:
-        """Classificação básica fallback"""
+        """Basic fallback classification"""
         filename_lower = filename.lower()
-        
+
         if any(term in filename_lower for term in ['main', 'app', 'index']):
             return "entry_point"
         elif any(term in filename_lower for term in ['auth', 'login', 'security']):
@@ -1304,61 +1424,61 @@ class EnterpriseCodeAnalyzer:
         else:
             return "business_logic"
 
-# Gerador de Relatórios Enterprise
+# Enterprise Report Generator
 class EnterprisePDFGenerator:
-    """Gerador de relatórios PDF enterprise"""
-    
+    """Enterprise PDF report generator"""
+
     def generate_enterprise_report(self, analysis_result: Dict) -> bytes:
-        """Gera relatório PDF enterprise completo"""
+        """Generates a complete enterprise PDF report"""
         buffer = io.BytesIO()
-        
+
         doc = SimpleDocTemplate(buffer, pagesize=A4)
         styles = getSampleStyleSheet()
         story = []
-        
-        # Cabeçalho Enterprise
-        title = Paragraph("AgentRisk Pro - Relatório Enterprise de Análise de IA", styles['Title'])
+
+        # Enterprise Header
+        title = Paragraph("AgentRisk Pro - Enterprise AI Analysis Report", styles['Title'])
         story.append(title)
         story.append(Spacer(1, 20))
-        
-        # Resumo Executivo
-        story.append(Paragraph("RESUMO EXECUTIVO", styles['Heading1']))
-        
+
+        # Executive Summary
+        story.append(Paragraph("EXECUTIVE SUMMARY", styles['Heading1']))
+
         executive_summary = f"""
-        <b>Score Geral do Sistema:</b> {analysis_result['enterprise_score']['overall_score']}/100<br/>
-        <b>Nível de Risco:</b> {analysis_result['risk_level'].value}<br/>
-        <b>Arquivos Analisados:</b> {analysis_result['files_analyzed']}<br/>
-        <b>Total de Linhas:</b> {analysis_result['total_lines']:,}<br/>
-        <b>Frameworks de Compliance:</b> {analysis_result['compliance_frameworks_checked']}<br/>
-        <b>Modelo de IA Utilizado:</b> {analysis_result['ai_model_used']}<br/>
-        <b>Data da Análise:</b> {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}<br/>
+        <b>Overall System Score:</b> {analysis_result['enterprise_score']['overall_score']}/100<br/>
+        <b>Risk Level:</b> {analysis_result['risk_level'].value}<br/>
+        <b>Files Analyzed:</b> {analysis_result['files_analyzed']}<br/>
+        <b>Total Lines:</b> {analysis_result['total_lines']:,}<br/>
+        <b>Compliance Frameworks Checked:</b> {analysis_result['compliance_frameworks_checked']}<br/>
+        <b>AI Model Used:</b> {analysis_result['ai_model_used']}<br/>
+        <b>Analysis Date:</b> {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}<br/>
         """
-        
+
         story.append(Paragraph(executive_summary, styles['Normal']))
         story.append(Spacer(1, 30))
-        
-        # Análise de Compliance
+
+        # Compliance Analysis
         if 'compliance_analysis' in analysis_result:
-            story.append(Paragraph("ANÁLISE DE CONFORMIDADE REGULATÓRIA", styles['Heading2']))
-            
+            story.append(Paragraph("REGULATORY COMPLIANCE ANALYSIS", styles['Heading2']))
+
             compliance = analysis_result['compliance_analysis']
-            
+
             compliance_table_data = [
-                ['Framework', 'Score', 'Status', 'Violações Críticas']
+                ['Framework', 'Score', 'Status', 'Critical Violations']
             ]
-            
+
             for framework, score in compliance.get('framework_scores', {}).items():
-                status = "✅ Conforme" if score >= 80 else "⚠️ Atenção" if score >= 60 else "❌ Não Conforme"
-                critical_count = len([v for v in compliance.get('violations', []) 
-                                    if v.framework == framework and v.severity in [RiskLevel.CRITICAL, RiskLevel.HIGH]])
-                
+                status = "✅ Compliant" if score >= 80 else "⚠️ Warning" if score >= 60 else "❌ Non-Compliant"
+                critical_count = len([v for v in compliance.get('violations', [])
+                                       if v.framework == framework and v.severity in [RiskLevel.CRITICAL, RiskLevel.HIGH]])
+
                 compliance_table_data.append([
                     framework.value,
                     f"{score:.1f}/100",
                     status,
                     str(critical_count)
                 ])
-            
+
             compliance_table = Table(compliance_table_data, colWidths=[120, 60, 80, 80])
             compliance_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), HexColor('#4a5568')),
@@ -1369,212 +1489,212 @@ class EnterprisePDFGenerator:
                 ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
                 ('GRID', (0, 0), (-1, -1), 1, HexColor('#000000'))
             ]))
-            
+
             story.append(compliance_table)
             story.append(Spacer(1, 20))
-        
-        # Top Riscos Críticos
-        story.append(Paragraph("TOP 5 RISCOS CRÍTICOS IDENTIFICADOS", styles['Heading2']))
-        
-        # Ordenar riscos por score
+
+        # Top Critical Risks
+        story.append(Paragraph("TOP 5 CRITICAL RISKS IDENTIFIED", styles['Heading2']))
+
+        # Sort risks by score
         all_risks = []
         for file_data in analysis_result.get('files_data', []):
             for risk in file_data.get('risk_assessments', []):
                 all_risks.append(risk)
-        
+
         top_risks = sorted(all_risks, key=lambda x: x.score, reverse=True)[:5]
-        
+
         for i, risk in enumerate(top_risks, 1):
             risk_color = '#7f1d1d' if risk.level == RiskLevel.CRITICAL else '#dc2626' if risk.level == RiskLevel.HIGH else '#f59e0b'
-            
+
             risk_text = f"""
             <font color='{risk_color}'><b>{i}. {risk.name}</b></font><br/>
-            <b>Score:</b> {risk.score:.1f}/100 | <b>Nível:</b> {risk.level.value}<br/>
-            <b>Categoria:</b> {risk.category}<br/>
-            <b>Prioridade:</b> {risk.remediation_priority}/5 | <b>Custo Estimado:</b> {risk.estimated_cost}<br/>
+            <b>Score:</b> {risk.score:.1f}/100 | <b>Level:</b> {risk.level.value}<br/>
+            <b>Category:</b> {risk.category}<br/>
+            <b>Priority:</b> {risk.remediation_priority}/5 | <b>Estimated Cost:</b> {risk.estimated_cost}<br/>
             <b>Timeline:</b> {risk.timeline}<br/>
             """
-            
+
             if risk.evidence:
-                risk_text += f"<b>Evidências:</b> {'; '.join(risk.evidence[:3])}<br/>"
-            
+                risk_text += f"<b>Evidence:</b> {'; '.join(risk.evidence[:3])}<br/>"
+
             story.append(Paragraph(risk_text, styles['Normal']))
             story.append(Spacer(1, 15))
-        
-        # Recomendações Estratégicas
+
+        # Strategic Recommendations
         story.append(Spacer(1, 20))
-        story.append(Paragraph("RECOMENDAÇÕES ESTRATÉGICAS", styles['Heading2']))
-        
+        story.append(Paragraph("STRATEGIC RECOMMENDATIONS", styles['Heading2']))
+
         if 'system_analysis' in analysis_result:
             recommendations = analysis_result['system_analysis'].get('strategic_recommendations', [])
             for i, rec in enumerate(recommendations[:5], 1):
                 rec_text = f"<b>{i}.</b> {rec}"
                 story.append(Paragraph(rec_text, styles['Normal']))
                 story.append(Spacer(1, 8))
-        
-        # Metodologia
+
+        # Methodology
         story.append(Spacer(1, 30))
-        story.append(Paragraph("METODOLOGIA DE ANÁLISE", styles['Heading2']))
-        
+        story.append(Paragraph("ANALYSIS METHODOLOGY", styles['Heading2']))
+
         methodology_text = """
-        <b>Análise Enterprise com IA:</b><br/>
-        • Análise semântica profunda com GPT-4o-mini<br/>
-        • Detecção de 10 categorias de risco específicas para IA Autônoma<br/>
-        • Verificação de conformidade com EU AI Act e LGPD<br/>
-        • Análise cruzada de dependências e arquitetura<br/>
-        • Score ponderado considerando compliance, segurança e arquitetura<br/><br/>
+        <b>Enterprise AI-Powered Analysis:</b><br/>
+        • Deep semantic analysis with GPT-4o-mini<br/>
+        • Detection of 10 specific risk categories for Autonomous AI<br/>
+        • Compliance verification with EU AI Act and LGPD<br/>
+        • Cross-analysis of dependencies and architecture<br/>
+        • Weighted score considering compliance, security, and architecture<br/><br/>
         
-        <b>Baseado em:</b> IBM Consulting - "Agentic AI in Financial Services" (Maio/2025)<br/>
-        <b>Frameworks Analisados:</b> EU AI Act, LGPD, GDPR, SOX, Basel III, PCI DSS
+        <b>Based on:</b> IBM Consulting - "Agentic AI in Financial Services" (May/2025)<br/>
+        <b>Analyzed Frameworks:</b> EU AI Act, LGPD, GDPR, SOX, Basel III, PCI DSS
         """
-        
+
         story.append(Paragraph(methodology_text, styles['Normal']))
-        
-        # Rodapé
+
+        # Footer
         story.append(Spacer(1, 40))
         footer_text = f"""
-        <b>Relatório gerado pelo AgentRisk Pro Enterprise</b><br/>
-        Hash da Análise: {analysis_result.get('analysis_hash', 'N/A')}<br/>
-        Confidencial - Uso interno exclusivo
+        <b>Report generated by AgentRisk Pro Enterprise</b><br/>
+        Analysis Hash: {analysis_result.get('analysis_hash', 'N/A')}<br/>
+        Confidential - For internal use only
         """
         story.append(Paragraph(footer_text, styles['Normal']))
-        
-        # Gerar PDF
+
+        # Generate PDF
         doc.build(story)
         buffer.seek(0)
         return buffer.getvalue()
 
-# Interface Principal Enterprise
+# Main Enterprise Interface
 def main():
-    """Interface principal enterprise"""
-    
-    # Verificar cliente OpenAI primeiro
+    """Main enterprise interface"""
+
+    # Check OpenAI client first
     try:
         client = get_openai_client()
         st.session_state.openai_client = client
     except Exception:
-        return  # O erro já foi tratado em get_openai_client()
-    
-    # Header Enterprise
+        return  # Error already handled in get_openai_client()
+
+    # Enterprise Header
     st.markdown("""
     <div class="enterprise-header">
         <h1>🛡️ AgentRisk Pro</h1>
         <h3>Enterprise AI-Powered Risk Analysis</h3>
-        <p>Análise Profunda de Riscos em Sistemas de IA Autônoma</p>
-        <div class="ai-analysis-badge">✨ IA Obrigatória • Compliance Avançado • Nível Enterprise</div>
+        <p>Deep Risk Analysis in Autonomous AI Systems</p>
+        <div class="ai-analysis-badge">✨ Mandatory AI • Advanced Compliance • Enterprise Level</div>
     </div>
     """, unsafe_allow_html=True)
-    
-    # Status Enterprise
+
+    # Enterprise Status
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.success("✅ OpenAI GPT-4o-mini")
     with col2:
         st.success("✅ ReportLab PDF")
     with col3:
-        st.success("✅ 10 Riscos IA Enterprise")
+        st.success("✅ 10 Enterprise AI Risks")
     with col4:
-        st.success("✅ 6 Frameworks Compliance")
-    
+        st.success("✅ 6 Compliance Frameworks")
+
     # Sidebar Enterprise
     with st.sidebar:
         st.header("🎛️ AgentRisk Pro")
-        
-        page = st.selectbox("Módulos:", [
-            "🔍 Análise Enterprise", 
-            "📊 Dashboard Executivo", 
+
+        page = st.selectbox("Modules:", [
+            "🔍 Enterprise Analysis",
+            "📊 Executive Dashboard",
             "⚖️ Compliance Center",
-            "🏗️ Arquitetura & Deps",
-            "⚙️ Configurações"
+            "🏗️ Architecture & Deps",
+            "⚙️ Settings"
         ])
-        
-        # Status da última análise
+
+        # Last analysis status
         if 'enterprise_analysis' in st.session_state:
             result = st.session_state.enterprise_analysis
             st.markdown("---")
-            st.markdown("**📊 Última Análise Enterprise**")
-            
+            st.markdown("**📊 Last Enterprise Analysis**")
+
             score = result.get('enterprise_score', {}).get('overall_score', 0)
             risk_level = result.get('risk_level', RiskLevel.MEDIUM)
-            
+
             score_color = "🔴" if score >= 65 else "🟡" if score >= 40 else "🟢"
-            
+
             st.info(f"""
             {score_color} **Score:** {score}/100
-            **Nível:** {risk_level.value}
-            **Arquivos:** {result.get('files_analyzed', 0)}
-            **Linhas:** {result.get('total_lines', 0):,}
-            **IA:** {result.get('ai_model_used', 'N/A')}
+            **Level:** {risk_level.value}
+            **Files:** {result.get('files_analyzed', 0)}
+            **Lines:** {result.get('total_lines', 0):,}
+            **AI:** {result.get('ai_model_used', 'N/A')}
             """)
-            
-            if st.button("🗑️ Limpar Análise"):
+
+            if st.button("🗑️ Clear Analysis"):
                 del st.session_state.enterprise_analysis
                 st.rerun()
-    
-    # Roteamento de páginas
-    if page == "🔍 Análise Enterprise":
+
+    # Page routing
+    if page == "🔍 Enterprise Analysis":
         show_enterprise_analysis_page()
-    elif page == "📊 Dashboard Executivo":
+    elif page == "📊 Executive Dashboard":
         show_executive_dashboard()
     elif page == "⚖️ Compliance Center":
         show_compliance_center()
-    elif page == "🏗️ Arquitetura & Deps":
+    elif page == "🏗️ Architecture & Deps":
         show_architecture_analysis()
     else:
         show_enterprise_config()
 
 def show_enterprise_analysis_page():
-    """Página principal de análise enterprise"""
-    
-    st.header("🔍 Análise Enterprise de Sistema IA")
-    
-    # Se já tem análise, mostrar resultados
+    """Main enterprise analysis page"""
+
+    st.header("🔍 Enterprise AI System Analysis")
+
+    # If analysis already exists, show results
     if 'enterprise_analysis' in st.session_state:
         col1, col2 = st.columns([1, 3])
         with col1:
-            if st.button("🔄 Nova Análise Enterprise", type="secondary"):
+            if st.button("🔄 New Enterprise Analysis", type="secondary"):
                 del st.session_state.enterprise_analysis
                 st.rerun()
         with col2:
-            st.success("✅ **Análise Enterprise concluída** - Resultados detalhados abaixo")
-        
+            st.success("✅ **Enterprise Analysis completed** - Detailed results below")
+
         show_enterprise_results(st.session_state.enterprise_analysis)
         return
-    
-    # Interface de upload enterprise
-    st.markdown("### 📤 Upload do Sistema para Análise Enterprise")
-    
+
+    # Enterprise upload interface
+    st.markdown("### 📤 Upload System for Enterprise Analysis")
+
     st.info("""
-    🎯 **Análise Enterprise Inclui:**
+    🎯 **Enterprise Analysis Includes:**
     
-    **🤖 IA Obrigatória:** Análise semântica profunda com GPT-4o-mini
-    **⚖️ Compliance Avançado:** EU AI Act, LGPD, GDPR, SOX, Basel III, PCI DSS
-    **🏗️ Arquitetura:** Análise de dependências, SPOF, integração
-    **🛡️ Segurança:** OWASP Top 10, vulnerabilidades críticas
-    **📊 Score Enterprise:** Ponderação inteligente com foco em compliance
+    **🤖 Mandatory AI:** Deep semantic analysis with GPT-4o-mini
+    **⚖️ Advanced Compliance:** EU AI Act, LGPD, GDPR, SOX, Basel III, PCI DSS
+    **🏗️ Architecture:** Dependency analysis, SPOF, integration
+    **🛡️ Security:** OWASP Top 10, critical vulnerabilities
+    **📊 Enterprise Score:** Intelligent weighting with focus on compliance
     """)
-    
+
     uploaded_files = st.file_uploader(
-        "Selecione os arquivos do sistema",
+        "Select system files",
         accept_multiple_files=True,
         type=['py', 'js', 'ts', 'java', 'cs', 'php', 'rb', 'go', 'cpp', 'c',
               'json', 'yaml', 'yml', 'xml', 'sql', 'md', 'txt', 'html', 'css'],
-        help="Todos os tipos de arquivo de código, configuração e documentação"
+        help="All types of code, configuration, and documentation files"
     )
-    
+
     if uploaded_files:
-        st.success(f"✅ **{len(uploaded_files)} arquivo(s) carregado(s)** para análise enterprise")
-        
-        # Preview detalhado dos arquivos
-        with st.expander("📋 Arquivos Carregados - Preview", expanded=True):
+        st.success(f"✅ **{len(uploaded_files)} file(s) loaded** for enterprise analysis")
+
+        # Detailed file preview
+        with st.expander("📋 Loaded Files - Preview", expanded=True):
             total_size = 0
-            
+
             for file in uploaded_files:
                 file_ext = os.path.splitext(file.name.lower())[1][1:]
                 analyzer = EnterpriseCodeAnalyzer(st.session_state.openai_client)
                 file_type = analyzer._get_file_type(file_ext)
                 total_size += file.size
-                
+
                 col1, col2, col3 = st.columns([3, 1, 1])
                 with col1:
                     st.write(f"📄 **{file.name}**")
@@ -1582,44 +1702,362 @@ def show_enterprise_analysis_page():
                     st.write(f"*{file_type}*")
                 with col3:
                     st.write(f"`{file.size:,} bytes`")
-            
-            st.write(f"**📊 Total:** {len(uploaded_files)} arquivos • {total_size:,} bytes")
-        
-        # Botão de análise enterprise
-        if st.button("🚀 Executar Análise Enterprise Completa", type="primary", use_container_width=True):
-            
-            # Análise assíncrona enterprise
+
+            st.write(f"**📊 Total:** {len(uploaded_files)} files • {total_size:,} bytes")
+
+        # Enterprise analysis button
+        if st.button("🚀 Execute Complete Enterprise Analysis", type="primary", use_container_width=True):
+
+            # Asynchronous enterprise analysis
             async def run_enterprise_analysis():
                 analyzer = EnterpriseCodeAnalyzer(st.session_state.openai_client)
                 return await analyzer.analyze_system_enterprise(uploaded_files)
-            
-            with st.spinner("🔄 Executando análise enterprise completa..."):
-                
-                # Simular async com threading (Streamlit não suporta async diretamente)
+
+            with st.spinner("🔄 Executing complete enterprise analysis..."):
+
+                # Simulate async with threading (Streamlit does not directly support async)
                 import asyncio
                 import threading
-                
+
                 result_container = {}
-                
+
                 def run_analysis():
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     result = loop.run_until_complete(run_enterprise_analysis())
                     result_container['result'] = result
                     loop.close()
-                
-                # Progress bar detalhado
+
+                # Detailed progress bar
                 progress_bar = st.progress(0)
                 status_text = st.empty()
-                
-                # Executar análise em thread separada
+
+                # Execute analysis in a separate thread
                 analysis_thread = threading.Thread(target=run_analysis)
                 analysis_thread.start()
-                
-                # Simular progresso
+
+                # Simulate progress
                 for i in range(101):
                     progress_bar.progress(i)
                     if i < 15:
-                        status_text.text("🤖 Inicializando análise com IA...")
-                
-                "
+                        status_text.text("🤖 Initializing AI analysis...")
+                    elif i < 40:
+                        status_text.text("📖 Reading and classifying files...")
+                    elif i < 70:
+                        status_text.text("⚙️ Detecting enterprise risks and security vulnerabilities...")
+                    elif i < 90:
+                        status_text.text("⚖️ Performing deep compliance checks...")
+                    else:
+                        status_text.text("📊 Finalizing scores and recommendations...")
+                    time.sleep(0.1) # Small delay for progress bar visibility
+
+                analysis_thread.join() # Wait for analysis to complete
+
+                if 'result' in result_container:
+                    st.session_state.enterprise_analysis = result_container['result']
+                    st.rerun()
+                else:
+                    st.error("❌ Analysis failed to complete.")
+
+def show_executive_dashboard():
+    """Executive Dashboard page"""
+    st.header("📊 Executive Dashboard")
+
+    if 'enterprise_analysis' not in st.session_state:
+        st.info("No enterprise analysis found. Please run an analysis first.")
+        return
+
+    analysis_result = st.session_state.enterprise_analysis
+    enterprise_score = analysis_result.get('enterprise_score', {})
+    risk_level = analysis_result.get('risk_level')
+    
+    st.markdown(f"""
+    <div class="score-enterprise">
+        <h2>Overall Enterprise Risk Score</h2>
+        <h1>{enterprise_score.get('overall_score', 'N/A')}/100</h1>
+        <h3>Risk Level: {risk_level.value}</h3>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.subheader("Component Scores")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Files Average", enterprise_score.get('component_scores', {}).get('files_average', 'N/A'))
+    with col2:
+        st.metric("System Analysis", enterprise_score.get('component_scores', {}).get('system_analysis', 'N/A'))
+    with col3:
+        st.metric("Compliance", enterprise_score.get('component_scores', {}).get('compliance', 'N/A'))
+    with col4:
+        st.metric("Architecture", enterprise_score.get('component_scores', {}).get('architecture', 'N/A'))
+
+    st.subheader("Risk Distribution by Level")
+    st.json(enterprise_score.get('risk_distribution', {}))
+
+    st.subheader("Priority Actions")
+    for action in enterprise_score.get('priority_actions', []):
+        st.warning(f"🚨 {action}")
+        
+    st.subheader("Strategic Recommendations")
+    if 'system_analysis' in analysis_result:
+        for rec in analysis_result['system_analysis'].get('strategic_recommendations', []):
+            st.markdown(f"- {rec}")
+
+    if st.button("Download Executive Report (PDF)", type="primary"):
+        pdf_generator = EnterprisePDFGenerator()
+        pdf_bytes = pdf_generator.generate_enterprise_report(analysis_result)
+        st.download_button(
+            label="Download PDF Report",
+            data=pdf_bytes,
+            file_name="AgentRisk_Pro_Enterprise_Report.pdf",
+            mime="application/pdf"
+        )
+
+
+def show_compliance_center():
+    """Compliance Center page"""
+    st.header("⚖️ Compliance Center")
+
+    if 'enterprise_analysis' not in st.session_state:
+        st.info("No enterprise analysis found. Please run an analysis first.")
+        return
+
+    compliance = st.session_state.enterprise_analysis.get('compliance_analysis', {})
+    
+    st.subheader("Overall Compliance Status")
+    st.markdown(f"**Overall Compliance Score:** {compliance.get('overall_compliance_score', 'N/A'):.1f}/100")
+    
+    st.subheader("Compliance Scores per Framework")
+    for framework, score in compliance.get('framework_scores', {}).items():
+        st.metric(f"Score for {framework.value}", f"{score:.1f}/100")
+
+    st.subheader("Compliance Violations")
+    violations = compliance.get('violations', [])
+    if violations:
+        for violation in violations:
+            severity_class = f"compliance-{violation.severity.name.lower()}"
+            st.markdown(f"""
+            <div class="risk-card-enterprise {severity_class}">
+                <b>Framework:</b> {violation.framework.value}<br/>
+                <b>Article:</b> {violation.article}<br/>
+                <b>Description:</b> {violation.description}<br/>
+                <b>Severity:</b> {violation.severity.value}<br/>
+                <b>Penalty Risk:</b> {violation.penalty_risk}<br/>
+                <b>Evidence:</b> {'; '.join(violation.evidence)}<br/>
+                <b>Remediation:</b> {'; '.join(violation.remediation)}
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.info("🎉 No compliance violations detected!")
+
+    st.subheader("Remediation Timeline")
+    remediation_timeline = compliance.get('remediation_timeline', {})
+    if remediation_timeline:
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("🚨 Immediate", remediation_timeline.get('immediate', 0), help="1-2 weeks - Urgent action")
+        with col2:
+            st.metric("⚠️ Short Term", remediation_timeline.get('short_term', 0), help="2-4 weeks")
+        with col3:
+            st.metric("📅 Medium Term", remediation_timeline.get('medium_term', 0), help="1-3 months")
+        with col4:
+            st.metric("⏱️ Total Estimated Time", remediation_timeline.get('estimated_total_time', 'N/A'))
+
+        st.markdown("**📋 Details by Violation:**")
+        for detail in remediation_timeline.get('details', [])[:10]: # Top 10 most urgent
+            violation = detail.get('violation', 'N/A')
+            timeline = detail.get('timeline', 'N/A')
+            reason = detail.get('reason', 'N/A')
+            penalty = detail.get('penalty_risk', 'N/A')
+
+            # Emoji based on urgency
+            if "Immediate" in timeline:
+                emoji = "🔴"
+                alert_type = "error"
+            elif "Short" in timeline:
+                emoji = "🟡"
+                alert_type = "warning"
+            else:
+                emoji = "🟢"
+                alert_type = "info"
+
+            with st.expander(f"{emoji} {violation} - {timeline}"):
+                st.markdown(f"**Reason:** {reason}")
+                st.markdown(f"**Penalty Risk:** {penalty}")
+                st.write(f"Further details for {violation}") # Add more details if available
+
+def show_architecture_analysis():
+    """Architecture & Dependencies page"""
+    st.header("🏗️ Architecture & Dependencies")
+
+    if 'enterprise_analysis' not in st.session_state:
+        st.info("No enterprise analysis found. Please run an analysis first.")
+        return
+
+    cross_analysis = st.session_state.enterprise_analysis.get('cross_analysis', {})
+
+    st.subheader("System Complexity")
+    st.metric("System Complexity Score", cross_analysis.get('system_complexity_score', 'N/A'))
+
+    st.subheader("Dependency Risks")
+    dependency_risks = cross_analysis.get('dependency_risks', [])
+    if dependency_risks:
+        for dr in dependency_risks:
+            with st.expander(f"File: {dr.get('file', 'N/A')} - Risk Score: {dr.get('risk_score', 'N/A')}"):
+                st.markdown(f"**Dependencies:** {', '.join(dr.get('dependencies', []))}")
+                st.markdown(f"**Critical Dependencies:** {', '.join(dr.get('critical_dependencies', []))}")
+                st.markdown(f"**Recommendations:** {'; '.join(dr.get('recommendations', []))}")
+    else:
+        st.info("No significant dependency risks detected.")
+
+    st.subheader("Single Points of Failure (SPOF)")
+    spofs = cross_analysis.get('single_points_failure', [])
+    if spofs and spofs != ["No SPOF identified (placeholder)"]:
+        for spof in spofs:
+            st.error(f"🚨 {spof}")
+    else:
+        st.info("No critical single points of failure identified.")
+
+    st.subheader("Architectural Recommendations")
+    arch_recs = cross_analysis.get('architectural_recommendations', [])
+    if arch_recs:
+        for rec in arch_recs:
+            st.markdown(f"- {rec}")
+    else:
+        st.info("No specific architectural recommendations at this time.")
+
+def show_enterprise_config():
+    """Settings page"""
+    st.header("⚙️ Settings")
+    st.info("Enterprise settings will be configured here.")
+    st.warning("Current settings are managed through Streamlit Secrets or Environment Variables.")
+
+def show_enterprise_results(analysis_result: Dict):
+    """Displays enterprise analysis results"""
+    st.header("Detailed Enterprise Analysis Results")
+
+    # Overall Score
+    st.markdown(f"""
+    <div class="score-enterprise">
+        <h2>Overall Enterprise Risk Score</h2>
+        <h1>{analysis_result['enterprise_score']['overall_score']}/100</h1>
+        <h3>Risk Level: {analysis_result['risk_level'].value}</h3>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Component Scores
+    st.subheader("📊 Component Scores")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Files Average", analysis_result['enterprise_score']['component_scores']['files_average'])
+    with col2:
+        st.metric("System Analysis", analysis_result['enterprise_score']['component_scores']['system_analysis'])
+    with col3:
+        st.metric("Compliance", analysis_result['enterprise_score']['component_scores']['compliance'])
+    with col4:
+        st.metric("Architecture", analysis_result['enterprise_score']['component_scores']['architecture'])
+
+    # Files Analyzed
+    st.subheader("📖 Files Analyzed")
+    st.info(f"Analyzed **{analysis_result['files_analyzed']} files** with a total of **{analysis_result['total_lines']:,} lines of code.**")
+    
+    with st.expander("Detailed File Analysis"):
+        for file_data in analysis_result.get('files_data', []):
+            st.markdown(f"#### 📄 {file_data['filename']} ({file_data['file_type']})")
+            st.write(f"Lines: {file_data['lines_count']} | Chars: {file_data['char_count']}")
+            st.write(f"File Score: {file_data['file_score']:.1f}/100 | Risk Level: {file_data['risk_level'].value}")
+            st.json(file_data['classification'])
+            if file_data.get('ai_insights'):
+                st.write(f"AI Insights: {file_data['ai_insights'].get('summary', 'N/A')}")
+            
+            if file_data.get('risk_assessments'):
+                st.markdown("##### Detected Risks:")
+                for risk_assessment in file_data['risk_assessments']:
+                    severity_class = f"risk-{risk_assessment.level.name.lower()}"
+                    st.markdown(f"""
+                    <div class="risk-card-enterprise {severity_class}">
+                        <b>Risk ID:</b> {risk_assessment.risk_id}<br/>
+                        <b>Name:</b> {risk_assessment.name}<br/>
+                        <b>Category:</b> {risk_assessment.category}<br/>
+                        <b>Score:</b> {risk_assessment.score:.1f}/100 | <b>Level:</b> {risk_assessment.level.value}<br/>
+                        <b>Priority:</b> {risk_assessment.remediation_priority}/5 | <b>Cost:</b> {risk_assessment.estimated_cost}<br/>
+                        <b>Timeline:</b> {risk_assessment.timeline}<br/>
+                        <b>Evidence:</b> {'; '.join(risk_assessment.evidence[:2])}...<br/>
+                        <b>Technical Details:</b> <div class="technical-detail">{json.dumps(risk_assessment.technical_details, indent=2)}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            st.markdown("---")
+
+    # System Analysis
+    st.subheader("🤖 System-Wide Analysis")
+    system_analysis = analysis_result.get('system_analysis', {})
+    st.json(system_analysis)
+
+    # Compliance Analysis
+    st.subheader("⚖️ Compliance Overview")
+    compliance = analysis_result.get('compliance_analysis', {})
+    st.markdown(f"**Overall Compliance Score:** {compliance.get('overall_compliance_score', 'N/A'):.1f}/100")
+    st.markdown(f"**Critical Violations:** {len(compliance.get('critical_violations', []))}")
+    
+    if compliance.get('violations'):
+        with st.expander("View All Compliance Violations"):
+            for violation in compliance['violations']:
+                severity_class = f"compliance-{violation.severity.name.lower()}"
+                st.markdown(f"""
+                <div class="risk-card-enterprise {severity_class}">
+                    <b>Framework:</b> {violation.framework.value}<br/>
+                    <b>Article:</b> {violation.article}<br/>
+                    <b>Description:</b> {violation.description}<br/>
+                    <b>Severity:</b> {violation.severity.value}<br/>
+                    <b>Penalty Risk:</b> {violation.penalty_risk}<br/>
+                </div>
+                """, unsafe_allow_html=True)
+
+    # Remediation Timeline
+    st.subheader("⏰ Detailed Remediation Timeline")
+    remediation_timeline = compliance.get('remediation_timeline', {})
+    if remediation_timeline:
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            immediate = remediation_timeline.get('immediate', 0)
+            st.metric("🚨 Immediate", immediate, help="1-2 weeks - Urgent action")
+        with col2:
+            short_term = remediation_timeline.get('short_term', 0)
+            st.metric("⚠️ Short Term", short_term, help="2-4 weeks")
+        with col3:
+            medium_term = remediation_timeline.get('medium_term', 0)
+            st.metric("📅 Medium Term", medium_term, help="1-3 months")
+        with col4:
+            total_time = remediation_timeline.get('estimated_total_time', 'N/A')
+            st.metric("⏱️ Total Estimated Time", total_time)
+
+        st.markdown("**📋 Details by Violation:**")
+        timeline_details = remediation_timeline.get('details', [])
+        if timeline_details:
+            for detail in timeline_details[:10]: # Top 10 most urgent
+                violation = detail.get('violation', 'N/A')
+                timeline = detail.get('timeline', 'N/A')
+                reason = detail.get('reason', 'N/A')
+                penalty = detail.get('penalty_risk', 'N/A')
+
+                # Emoji based on urgency
+                if "Immediate" in timeline:
+                    emoji = "🔴"
+                elif "Short" in timeline:
+                    emoji = "🟡"
+                else:
+                    emoji = "🟢"
+
+                with st.expander(f"{emoji} {violation} - {timeline}"):
+                    st.markdown(f"**Reason:** {reason}")
+                    st.markdown(f"**Penalty Risk:** {penalty}")
+    else:
+        st.info("No remediation timeline details available.")
+
+    # Cross Analysis
+    st.subheader("🔗 Architectural & Cross-System Analysis")
+    cross_analysis = analysis_result.get('cross_analysis', {})
+    st.json(cross_analysis)
+
+# Entry point
+if __name__ == "__main__":
+    main()
