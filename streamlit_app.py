@@ -3,26 +3,20 @@ import json
 import datetime
 import base64
 import io
-from typing import Dict, List, Tuple, Any
-import re
 import os
-import streamlit as st
-import json
-import datetime
-import base64
-import io
-from typing import Dict, List, Tuple, Any
 import re
-import zipfile
-import tempfile
-import os
+from typing import Dict, List, Tuple, Any
 
-# Importações condicionais para evitar erros
+# Importações condicionais
 try:
-    from fpdf import FPDF
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import letter, A4
+    from reportlab.lib.colors import HexColor
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
     PDF_AVAILABLE = True
 except ImportError:
-    st.error("❌ FPDF2 é obrigatório! Instale: pip install fpdf2")
+    st.error("❌ ReportLab é obrigatório para gerar PDFs!")
     st.stop()
 
 try:
@@ -32,228 +26,190 @@ try:
 except ImportError:
     OPENAI_AVAILABLE = False
 
-try:
-    import magic
-    MAGIC_AVAILABLE = True
-except ImportError:
-    st.error("❌ python-magic-bin é obrigatório! Instale: pip install python-magic-bin")
-    st.stop()
-
 # Configuração da página
 st.set_page_config(
-    page_title="AgentRisk - Análise de Código para Avaliação de Riscos",
+    page_title="AgentRisk - Análise de Código",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Configuração da OpenAI
+# Configuração OpenAI
 @st.cache_resource
 def get_openai_client():
-    """Inicializa cliente OpenAI com chave dos secrets"""
+    """Inicializa cliente OpenAI"""
     if not OPENAI_AVAILABLE:
         return None
-        
     try:
         if "OPENAI_API_KEY" in st.secrets:
-            api_key = st.secrets["OPENAI_API_KEY"]
-            return OpenAI(api_key=api_key)
-        else:
-            return None
-    except Exception as e:
+            return OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+        return None
+    except Exception:
         return None
 
-# CSS personalizado
+# CSS
 st.markdown("""
 <style>
-    .main-header {
-        background: linear-gradient(90deg, #1e3a8a 0%, #3b82f6 100%);
-        padding: 1.5rem;
-        border-radius: 10px;
-        color: white;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    .file-card {
-        border: 1px solid #e5e7eb;
-        border-radius: 8px;
-        padding: 1rem;
-        margin: 0.5rem 0;
-        background: white;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    }
-    .risk-high { border-left: 5px solid #dc2626; background: #fef2f2; }
-    .risk-medium { border-left: 5px solid #f59e0b; background: #fffbeb; }
-    .risk-low { border-left: 5px solid #10b981; background: #f0fdf4; }
-    .score-container {
-        text-align: center;
-        padding: 2rem;
-        border-radius: 10px;
-        margin: 1rem 0;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    .score-high { background: #fef2f2; border: 2px solid #dc2626; }
-    .score-medium { background: #fffbeb; border: 2px solid #f59e0b; }
-    .score-low { background: #f0fdf4; border: 2px solid #10b981; }
-    .code-preview {
-        background: #f8f9fa;
-        border: 1px solid #e9ecef;
-        border-radius: 4px;
-        padding: 1rem;
-        font-family: 'Courier New', monospace;
-        font-size: 12px;
-        max-height: 200px;
-        overflow-y: auto;
-    }
+.main-header {
+    background: linear-gradient(90deg, #1e3a8a 0%, #3b82f6 100%);
+    padding: 2rem;
+    border-radius: 10px;
+    color: white;
+    text-align: center;
+    margin-bottom: 2rem;
+}
+.risk-card {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 1rem;
+    margin: 0.5rem 0;
+    background: white;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+.risk-high { border-left: 5px solid #dc2626; background: #fef2f2; }
+.risk-medium { border-left: 5px solid #f59e0b; background: #fffbeb; }
+.risk-low { border-left: 5px solid #10b981; background: #f0fdf4; }
+.score-container {
+    text-align: center;
+    padding: 2rem;
+    border-radius: 10px;
+    margin: 1rem 0;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+.score-high { background: #fef2f2; border: 2px solid #dc2626; }
+.score-medium { background: #fffbeb; border: 2px solid #f59e0b; }
+.score-low { background: #f0fdf4; border: 2px solid #10b981; }
 </style>
 """, unsafe_allow_html=True)
 
-# Definição dos 15 riscos baseados no documento IBM
+# Definição dos 15 riscos
 AGENTIC_AI_RISKS = {
     "1": {
         "nome": "Desalinhamento de Objetivos",
-        "descricao": "Agente pode buscar objetivos diferentes dos pretendidos pela organização",
+        "descricao": "Sistema pode buscar objetivos diferentes dos pretendidos",
         "categoria": "Governança",
-        "code_patterns": ["todo", "fixme", "hack", "workaround", "temporary"]
+        "patterns": ["todo", "fixme", "hack", "workaround", "temporary"]
     },
     "2": {
-        "nome": "Ações Autônomas Indesejadas",
-        "descricao": "Execução de ações sem aprovação humana adequada em contextos críticos",
+        "nome": "Ações Autônomas Indesejadas", 
+        "descricao": "Execução de ações sem aprovação humana adequada",
         "categoria": "Autonomia",
-        "code_patterns": ["auto", "automatic", "without_approval", "no_human", "direct_action"]
+        "patterns": ["auto", "automatic", "without_approval", "direct_action"]
     },
     "3": {
         "nome": "Uso Indevido de APIs",
-        "descricao": "Utilização inadequada ou excessiva de APIs e serviços externos",
-        "categoria": "Integração",
-        "code_patterns": ["requests.", "fetch(", "axios", "api_key", "http"]
+        "descricao": "Utilização inadequada de APIs e serviços externos",
+        "categoria": "Integração", 
+        "patterns": ["requests.", "fetch(", "axios", "api_key", "http"]
     },
     "4": {
         "nome": "Decepção e Viés de Persona",
-        "descricao": "Comportamentos enganosos ou enviesados baseados na persona do agente",
+        "descricao": "Comportamentos enviesados baseados na persona do agente",
         "categoria": "Comportamento",
-        "code_patterns": ["bias", "fake", "deceive", "manipulate", "persona"]
+        "patterns": ["bias", "fake", "deceive", "manipulate", "persona"]
     },
     "5": {
         "nome": "Persistência de Memória Inadequada",
-        "descricao": "Retenção inapropriada de informações sensíveis ou contextos obsoletos",
+        "descricao": "Retenção inapropriada de informações sensíveis",
         "categoria": "Memória",
-        "code_patterns": ["cache", "session", "memory", "persist", "store"]
+        "patterns": ["cache", "session", "memory", "persist", "store"]
     },
     "6": {
-        "nome": "Transparência e Explicabilidade Limitada",
-        "descricao": "Dificuldade em explicar decisões e processos de raciocínio do agente",
+        "nome": "Transparência Limitada",
+        "descricao": "Dificuldade em explicar decisões do sistema",
         "categoria": "Transparência",
-        "code_patterns": ["black_box", "unexplained", "no_log", "silent"]
+        "patterns": ["black_box", "unexplained", "no_log", "silent"]
     },
     "7": {
         "nome": "Vulnerabilidades de Segurança",
-        "descricao": "Exposição a ataques, vazamentos de dados e falhas de segurança",
+        "descricao": "Exposição a ataques e falhas de segurança",
         "categoria": "Segurança",
-        "code_patterns": ["eval", "exec", "unsafe", "no_auth", "hardcoded"]
+        "patterns": ["eval", "exec", "unsafe", "hardcoded", "password"]
     },
     "8": {
         "nome": "Conformidade Regulatória",
-        "descricao": "Não atendimento a regulamentações como AI Act, LGPD e normas setoriais",
+        "descricao": "Não atendimento a regulamentações (LGPD, AI Act)",
         "categoria": "Compliance",
-        "code_patterns": ["gdpr", "lgpd", "compliance", "regulation", "audit"]
+        "patterns": ["gdpr", "lgpd", "compliance", "regulation", "audit"]
     },
     "9": {
         "nome": "Escalabilidade e Performance",
-        "descricao": "Limitações na capacidade de escalar e manter performance adequada",
-        "categoria": "Performance",
-        "code_patterns": ["bottleneck", "slow", "timeout", "performance", "scale"]
+        "descricao": "Limitações na capacidade de escalar adequadamente",
+        "categoria": "Performance", 
+        "patterns": ["bottleneck", "slow", "timeout", "performance"]
     },
     "10": {
-        "nome": "Qualidade e Integridade dos Dados",
-        "descricao": "Problemas na qualidade, completude e veracidade dos dados utilizados",
+        "nome": "Qualidade dos Dados",
+        "descricao": "Problemas na qualidade e integridade dos dados",
         "categoria": "Dados",
-        "code_patterns": ["validate", "sanitize", "clean", "quality", "integrity"]
+        "patterns": ["validate", "sanitize", "clean", "quality"]
     },
     "11": {
         "nome": "Monitoramento e Auditoria",
-        "descricao": "Ausência de sistemas adequados de monitoramento e trilhas de auditoria",
+        "descricao": "Ausência de monitoramento e trilhas de auditoria",
         "categoria": "Observabilidade",
-        "code_patterns": ["log", "monitor", "audit", "track", "observe"]
+        "patterns": ["log", "monitor", "audit", "track", "observe"]
     },
     "12": {
-        "nome": "Gestão de Exceções e Falhas",
-        "descricao": "Tratamento inadequado de situações excepcionais e recuperação de falhas",
+        "nome": "Gestão de Exceções",
+        "descricao": "Tratamento inadequado de situações excepcionais",
         "categoria": "Robustez",
-        "code_patterns": ["try", "except", "catch", "error", "fallback"]
+        "patterns": ["try", "except", "catch", "error", "fallback"]
     },
     "13": {
         "nome": "Dependências Externas",
-        "descricao": "Riscos associados à dependência de serviços e recursos externos",
+        "descricao": "Riscos de dependência de serviços externos",
         "categoria": "Dependência",
-        "code_patterns": ["import", "require", "dependency", "external", "third_party"]
+        "patterns": ["import", "require", "dependency", "external"]
     },
     "14": {
         "nome": "Impacto nos Stakeholders",
-        "descricao": "Efeitos não intencionais em usuários, funcionários e outras partes interessadas",
+        "descricao": "Efeitos não intencionais em usuários e funcionários",
         "categoria": "Social",
-        "code_patterns": ["user", "customer", "employee", "stakeholder", "impact"]
+        "patterns": ["user", "customer", "employee", "stakeholder"]
     },
     "15": {
-        "nome": "Evolução e Adaptação Descontrolada",
-        "descricao": "Mudanças não supervisionadas no comportamento através de aprendizado contínuo",
+        "nome": "Evolução Descontrolada",
+        "descricao": "Mudanças não supervisionadas via aprendizado contínuo",
         "categoria": "Evolução",
-        "code_patterns": ["learning", "adapt", "evolve", "self_modify", "update_model"]
+        "patterns": ["learning", "adapt", "evolve", "self_modify"]
     }
 }
 
 # Tipos de arquivo suportados
-SUPPORTED_EXTENSIONS = {
-    '.py': 'Python',
-    '.js': 'JavaScript', 
-    '.ts': 'TypeScript',
-    '.java': 'Java',
-    '.cs': 'C#',
-    '.php': 'PHP',
-    '.rb': 'Ruby',
-    '.go': 'Go',
-    '.cpp': 'C++',
-    '.c': 'C',
-    '.json': 'JSON Config',
-    '.yaml': 'YAML Config',
-    '.yml': 'YAML Config',
-    '.xml': 'XML Config',
-    '.sql': 'SQL',
-    '.md': 'Documentation',
-    '.txt': 'Text'
-}
+SUPPORTED_EXTENSIONS = [
+    'py', 'js', 'ts', 'java', 'cs', 'php', 'rb', 'go', 'cpp', 'c',
+    'json', 'yaml', 'yml', 'xml', 'sql', 'md', 'txt'
+]
 
-class CodeFileAnalyzer:
-    """Analisador de arquivos de código para detecção de riscos"""
+class CodeAnalyzer:
+    """Analisador de código para detecção de riscos"""
     
     def __init__(self, openai_client=None):
         self.client = openai_client
-    
-    def analyze_files(self, uploaded_files) -> Dict:
-        """Analisa múltiplos arquivos de código"""
         
+    def analyze_files(self, uploaded_files) -> Dict:
+        """Analisa múltiplos arquivos"""
         if not uploaded_files:
             return {"error": "Nenhum arquivo fornecido"}
-        
+            
         files_data = []
         total_lines = 0
         
         for uploaded_file in uploaded_files:
             try:
-                file_content = self._read_file_content(uploaded_file)
-                
-                if file_content:
-                    file_analysis = self._analyze_single_file(uploaded_file.name, file_content)
-                    files_data.append(file_analysis)
-                    total_lines += file_analysis.get('lines_count', 0)
-                    
+                content = self._read_file_content(uploaded_file)
+                if content:
+                    analysis = self._analyze_single_file(uploaded_file.name, content)
+                    files_data.append(analysis)
+                    total_lines += analysis.get('lines_count', 0)
             except Exception as e:
                 st.warning(f"⚠️ Erro ao processar {uploaded_file.name}: {str(e)}")
                 continue
-        
+                
         if not files_data:
-            return {"error": "Nenhum arquivo válido encontrado"}
-        
+            return {"error": "Nenhum arquivo válido"}
+            
         cross_analysis = self._cross_file_analysis(files_data)
         global_score = self._calculate_global_score(files_data, cross_analysis)
         
@@ -266,193 +222,87 @@ class CodeFileAnalyzer:
             "cross_analysis": cross_analysis,
             "risks_summary": self._generate_risks_summary(files_data),
             "analysis_date": datetime.datetime.now().isoformat(),
-            "analysis_method": "Análise de Código Multi-Arquivo"
+            "analysis_method": "Análise Multi-Arquivo"
         }
     
     def _read_file_content(self, uploaded_file) -> str:
-        """Lê o conteúdo de um arquivo uploaded com validação robusta"""
+        """Lê conteúdo do arquivo"""
         try:
-            # Ler conteúdo como bytes primeiro
             uploaded_file.seek(0)
-            file_bytes = uploaded_file.read()
+            content = uploaded_file.read()
             
-            # === VALIDAÇÃO ROBUSTA COM MAGIC ===
-            if MAGIC_AVAILABLE:
-                # Detectar tipo REAL do arquivo
-                mime_type = magic.from_buffer(file_bytes, mime=True)
-                file_type_desc = magic.from_buffer(file_bytes)
-                
-                # Verificar se é arquivo de texto/código
-                safe_mime_types = [
-                    'text/plain', 'text/x-python', 'text/x-c', 'text/x-java',
-                    'text/javascript', 'application/javascript', 'text/x-php',
-                    'text/x-ruby', 'text/x-go', 'text/x-csharp', 'text/x-sql',
-                    'application/json', 'text/x-yaml', 'application/xml',
-                    'text/xml', 'text/markdown', 'text/x-markdown',
-                    'application/x-php', 'text/x-script.python'
-                ]
-                
-                # Verificar se o tipo MIME é seguro
-                is_safe_file = any(safe_type in mime_type for safe_type in safe_mime_types)
-                is_text_file = mime_type.startswith('text/') 
-                
-                if not (is_safe_file or is_text_file):
-                    st.warning(f"⚠️ Arquivo {uploaded_file.name} detectado como: {file_type_desc}")
-                    st.warning(f"⚠️ MIME type: {mime_type} - Pode não ser um arquivo de código")
-                    
-                    # Perguntar se quer continuar
-                    if not st.checkbox(f"Continuar análise de {uploaded_file.name}? (arquivo pode não ser código)", key=f"continue_{uploaded_file.name}"):
-                        return ""
-                
-                # Log do tipo detectado para debug
-                st.info(f"🔍 {uploaded_file.name}: {mime_type} - {file_type_desc[:50]}...")
-            
-            # === DECODIFICAÇÃO ROBUSTA ===
-            # Tentar diferentes encodings
-            for encoding in ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']:
+            # Tentar decodificar
+            for encoding in ['utf-8', 'latin-1', 'cp1252']:
                 try:
-                    content = file_bytes.decode(encoding)
-                    
-                    # Validação adicional: verificar se é realmente texto
-                    if self._is_text_content(content):
-                        return content
-                    else:
-                        st.warning(f"⚠️ {uploaded_file.name} não parece conter código de texto válido")
-                        return ""
-                        
+                    return content.decode(encoding)
                 except UnicodeDecodeError:
                     continue
-            
-            # Se chegou aqui, não conseguiu decodificar
-            st.error(f"❌ Não foi possível decodificar {uploaded_file.name} como arquivo de texto")
-            return ""
-            
+                    
+            return str(content)
         except Exception as e:
-            st.error(f"❌ Erro ao processar {uploaded_file.name}: {str(e)}")
+            st.error(f"Erro ao ler {uploaded_file.name}: {str(e)}")
             return ""
-    
-    def _is_text_content(self, content: str) -> bool:
-        """Verifica se o conteúdo é realmente texto/código válido"""
-        
-        # Verificar se tem muito conteúdo binário
-        binary_chars = sum(1 for char in content if ord(char) < 32 and char not in '\n\r\t')
-        total_chars = len(content)
-        
-        if total_chars == 0:
-            return False
-            
-        # Se mais de 10% são caracteres binários, provavelmente não é texto
-        binary_ratio = binary_chars / total_chars
-        if binary_ratio > 0.1:
-            return False
-        
-        # Verificar se tem padrões de código comuns
-        code_patterns = [
-            'import ', 'function ', 'class ', 'def ', 'var ', 'const ',
-            'public ', 'private ', 'package ', '<?php', '#!/', 'SELECT ',
-            'INSERT ', 'UPDATE ', 'CREATE ', '{', '}', '(', ')', ';',
-            '//', '/*', '*/', '#', 'if ', 'else ', 'for ', 'while '
-        ]
-        
-        content_lower = content.lower()
-        code_pattern_matches = sum(1 for pattern in code_patterns if pattern in content_lower)
-        
-        # Se tem pelo menos alguns padrões de código, provavelmente é válido
-        return code_pattern_matches >= 2 or len(content.strip()) > 10
     
     def _analyze_single_file(self, filename: str, content: str) -> Dict:
-        """Analisa um único arquivo de código com detecção robusta"""
-        
-        file_ext = os.path.splitext(filename.lower())[1]
-        file_type = SUPPORTED_EXTENSIONS.get(file_ext, 'Unknown')
-        
-        # === DETECÇÃO AVANÇADA DE TIPO ===
-        if MAGIC_AVAILABLE:
-            try:
-                # Re-detectar o tipo baseado no conteúdo
-                content_bytes = content.encode('utf-8')
-                mime_type = magic.from_buffer(content_bytes, mime=True)
-                
-                # Mapear MIME types para tipos mais específicos
-                mime_to_type = {
-                    'text/x-python': 'Python',
-                    'text/x-script.python': 'Python',
-                    'text/javascript': 'JavaScript',
-                    'application/javascript': 'JavaScript',
-                    'text/x-php': 'PHP',
-                    'application/x-php': 'PHP',
-                    'text/x-java': 'Java',
-                    'text/x-c': 'C/C++',
-                    'text/x-c++': 'C++',
-                    'text/x-csharp': 'C#',
-                    'text/x-ruby': 'Ruby',
-                    'text/x-go': 'Go',
-                    'text/x-sql': 'SQL',
-                    'application/json': 'JSON Config',
-                    'text/x-yaml': 'YAML Config',
-                    'application/xml': 'XML Config',
-                    'text/xml': 'XML Config',
-                    'text/markdown': 'Markdown',
-                    'text/x-markdown': 'Markdown'
-                }
-                
-                # Se magic detectou um tipo mais específico, usar ele
-                if mime_type in mime_to_type:
-                    file_type = mime_to_type[mime_type]
-                    
-            except Exception as e:
-                # Se magic falhar, usar detecção por extensão
-                pass
+        """Analisa um arquivo"""
+        file_ext = os.path.splitext(filename.lower())[1][1:]  # Remove o ponto
         
         lines = content.split('\n')
         lines_count = len(lines)
         char_count = len(content)
         
-        file_classification = self._classify_file_purpose(filename, content)
+        classification = self._classify_file(filename, content)
         risk_patterns = self._detect_risk_patterns(content)
-        security_issues = self._detect_security_issues(content, file_ext)
+        security_issues = self._detect_security_issues(content)
         file_score = self._calculate_file_score(risk_patterns, security_issues, content)
         
         return {
             "filename": filename,
-            "file_type": file_type,
-            "file_extension": file_ext,
-            "classification": file_classification,
+            "file_type": self._get_file_type(file_ext),
+            "classification": classification,
             "lines_count": lines_count,
             "char_count": char_count,
             "file_score": file_score,
             "risk_level": self._get_risk_level(file_score),
             "risk_patterns": risk_patterns,
             "security_issues": security_issues,
-            "content_preview": self._get_content_preview(content),
-            "critical_lines": self._find_critical_lines(lines),
-            "mime_validation": "OK" if MAGIC_AVAILABLE else "SKIP"
+            "content_preview": content[:500] + "..." if len(content) > 500 else content,
+            "critical_lines": self._find_critical_lines(lines)
         }
     
-    def _classify_file_purpose(self, filename: str, content: str) -> str:
-        """Classifica o propósito do arquivo"""
+    def _get_file_type(self, extension: str) -> str:
+        """Retorna tipo do arquivo baseado na extensão"""
+        type_map = {
+            'py': 'Python', 'js': 'JavaScript', 'ts': 'TypeScript',
+            'java': 'Java', 'cs': 'C#', 'php': 'PHP', 'rb': 'Ruby',
+            'go': 'Go', 'cpp': 'C++', 'c': 'C', 'json': 'JSON',
+            'yaml': 'YAML', 'yml': 'YAML', 'xml': 'XML',
+            'sql': 'SQL', 'md': 'Markdown', 'txt': 'Text'
+        }
+        return type_map.get(extension, 'Unknown')
+    
+    def _classify_file(self, filename: str, content: str) -> str:
+        """Classifica propósito do arquivo"""
         filename_lower = filename.lower()
         content_lower = content.lower()
         
-        if any(term in filename_lower for term in ['main', 'app', 'server', 'index']):
+        if any(term in filename_lower for term in ['main', 'app', 'index']):
             return "entry_point"
         elif any(term in filename_lower for term in ['auth', 'login', 'security']):
             return "security"
-        elif any(term in filename_lower for term in ['model', 'schema', 'database', 'db']):
-            return "data_model"
-        elif any(term in filename_lower for term in ['config', 'setting', 'env']):
+        elif any(term in filename_lower for term in ['config', 'setting']):
             return "configuration"
-        elif any(term in filename_lower for term in ['api', 'endpoint', 'route']):
+        elif any(term in filename_lower for term in ['api', 'route']):
             return "api_layer"
+        elif any(term in filename_lower for term in ['model', 'schema']):
+            return "data_model"
         elif any(term in filename_lower for term in ['test', 'spec']):
             return "testing"
-        elif filename_lower.endswith('.md'):
-            return "documentation"
         else:
             return "business_logic"
     
     def _detect_risk_patterns(self, content: str) -> Dict:
-        """Detecta padrões de risco no código"""
+        """Detecta padrões de risco"""
         content_lower = content.lower()
         detected_risks = {}
         
@@ -460,20 +310,20 @@ class CodeFileAnalyzer:
             risk_score = 0
             found_patterns = []
             
-            for pattern in risk_info.get('code_patterns', []):
+            for pattern in risk_info.get('patterns', []):
                 if pattern in content_lower:
                     risk_score += 20
                     found_patterns.append(pattern)
             
+            # Padrões críticos
             critical_patterns = {
-                'eval(': 50, 'exec(': 50, 'unsafe': 30,
-                'hardcoded': 40, 'password': 30, 'secret': 30,
-                'admin': 20, 'root': 25, 'sudo': 30
+                'eval(': 50, 'exec(': 50, 'password': 30, 
+                'secret': 30, 'admin': 20, 'root': 25
             }
             
-            for pattern, score_increase in critical_patterns.items():
+            for pattern, score_add in critical_patterns.items():
                 if pattern in content_lower:
-                    risk_score += score_increase
+                    risk_score += score_add
                     found_patterns.append(pattern)
             
             detected_risks[risk_id] = {
@@ -485,8 +335,8 @@ class CodeFileAnalyzer:
         
         return detected_risks
     
-    def _detect_security_issues(self, content: str, file_ext: str) -> List[Dict]:
-        """Detecta problemas específicos de segurança"""
+    def _detect_security_issues(self, content: str) -> List[Dict]:
+        """Detecta problemas de segurança"""
         issues = []
         lines = content.split('\n')
         
@@ -494,14 +344,12 @@ class CodeFileAnalyzer:
             'hardcoded_secrets': [
                 r'password\s*=\s*["\'][^"\']+["\']',
                 r'api_key\s*=\s*["\'][^"\']+["\']',
-                r'secret\s*=\s*["\'][^"\']+["\']',
-                r'token\s*=\s*["\'][^"\']+["\']'
+                r'secret\s*=\s*["\'][^"\']+["\']'
             ],
             'dangerous_functions': [
                 r'eval\s*\(',
                 r'exec\s*\(',
-                r'system\s*\(',
-                r'shell_exec\s*\('
+                r'system\s*\('
             ]
         }
         
@@ -513,40 +361,38 @@ class CodeFileAnalyzer:
                             "type": issue_type,
                             "line": line_num,
                             "content": line.strip(),
-                            "severity": "HIGH" if issue_type in ['dangerous_functions', 'hardcoded_secrets'] else "MEDIUM",
-                            "description": self._get_security_issue_description(issue_type)
+                            "severity": "HIGH" if issue_type == 'dangerous_functions' else "MEDIUM",
+                            "description": self._get_security_description(issue_type)
                         })
         
         return issues
     
-    def _get_security_issue_description(self, issue_type: str) -> str:
-        """Retorna descrição do problema de segurança"""
+    def _get_security_description(self, issue_type: str) -> str:
+        """Descrição do problema de segurança"""
         descriptions = {
             'hardcoded_secrets': 'Credenciais hardcoded no código',
             'dangerous_functions': 'Uso de funções perigosas (eval, exec)'
         }
-        return descriptions.get(issue_type, 'Problema de segurança detectado')
+        return descriptions.get(issue_type, 'Problema de segurança')
     
     def _calculate_file_score(self, risk_patterns: Dict, security_issues: List, content: str) -> float:
-        """Calcula score de risco para um arquivo"""
+        """Calcula score de risco do arquivo"""
         base_score = 20
-        patterns_score = sum(risk['score'] for risk in risk_patterns.values()) / len(risk_patterns)
+        patterns_score = sum(r['score'] for r in risk_patterns.values()) / len(risk_patterns)
         
         security_score = 0
         for issue in security_issues:
-            if issue['severity'] == 'HIGH':
-                security_score += 30
-            elif issue['severity'] == 'MEDIUM':
-                security_score += 15
+            security_score += 30 if issue['severity'] == 'HIGH' else 15
         
-        good_practices = ['try:', 'except:', 'logging.', 'log.', 'validate']
+        # Fatores que reduzem risco
+        good_practices = ['try:', 'except:', 'logging', 'validate', 'sanitize']
         reduction = sum(5 for practice in good_practices if practice in content.lower())
         
         final_score = base_score + (patterns_score * 0.6) + security_score - reduction
         return max(0, min(100, final_score))
     
     def _get_risk_level(self, score: float) -> str:
-        """Converte score em nível de risco"""
+        """Converte score em nível"""
         if score >= 70:
             return "Alto"
         elif score >= 40:
@@ -554,18 +400,13 @@ class CodeFileAnalyzer:
         else:
             return "Baixo"
     
-    def _get_content_preview(self, content: str, max_lines: int = 10) -> str:
-        """Gera preview do conteúdo do arquivo"""
-        lines = content.split('\n')[:max_lines]
-        return '\n'.join(lines)
-    
     def _find_critical_lines(self, lines: List[str]) -> List[Dict]:
-        """Encontra linhas críticas no código"""
+        """Encontra linhas críticas"""
         critical_lines = []
-        critical_keywords = ['password', 'secret', 'token', 'api_key', 'eval', 'exec']
+        keywords = ['password', 'secret', 'token', 'eval', 'exec', 'admin']
         
         for line_num, line in enumerate(lines, 1):
-            if any(keyword in line.lower() for keyword in critical_keywords):
+            if any(keyword in line.lower() for keyword in keywords):
                 critical_lines.append({
                     "line_number": line_num,
                     "content": line.strip(),
@@ -582,20 +423,21 @@ class CodeFileAnalyzer:
         api_files = [f for f in files_data if f['classification'] == 'api_layer']
         auth_files = [f for f in files_data if f['classification'] == 'security']
         
-        if config_files:
-            for config_file in config_files:
-                if any(issue['type'] == 'hardcoded_secrets' for issue in config_file['security_issues']):
-                    cross_risks.append({
-                        "type": "credentials_exposure",
-                        "description": f"Credenciais em {config_file['filename']} podem afetar toda aplicação",
-                        "severity": "HIGH",
-                        "affected_files": [f['filename'] for f in files_data if f != config_file]
-                    })
+        # Verificar credenciais em configs
+        for config_file in config_files:
+            if any(issue['type'] == 'hardcoded_secrets' for issue in config_file['security_issues']):
+                cross_risks.append({
+                    "type": "credentials_exposure",
+                    "description": f"Credenciais em {config_file['filename']} afetam sistema",
+                    "severity": "HIGH",
+                    "affected_files": [f['filename'] for f in files_data if f != config_file]
+                })
         
+        # APIs sem autenticação
         if api_files and not auth_files:
             cross_risks.append({
                 "type": "api_without_auth",
-                "description": "APIs detectadas sem sistema de autenticação correspondente",
+                "description": "APIs sem sistema de autenticação",
                 "severity": "HIGH",
                 "affected_files": [f['filename'] for f in api_files]
             })
@@ -603,12 +445,12 @@ class CodeFileAnalyzer:
         return {
             "risks_found": len(cross_risks),
             "cross_risks": cross_risks,
-            "system_architecture": self._analyze_system_architecture(files_data)
+            "system_architecture": self._analyze_architecture(files_data)
         }
     
-    def _analyze_system_architecture(self, files_data: List[Dict]) -> Dict:
-        """Analisa a arquitetura geral do sistema"""
-        architecture = {
+    def _analyze_architecture(self, files_data: List[Dict]) -> Dict:
+        """Analisa arquitetura do sistema"""
+        arch = {
             "entry_points": len([f for f in files_data if f['classification'] == 'entry_point']),
             "api_layers": len([f for f in files_data if f['classification'] == 'api_layer']),
             "data_models": len([f for f in files_data if f['classification'] == 'data_model']),
@@ -617,34 +459,33 @@ class CodeFileAnalyzer:
             "test_files": len([f for f in files_data if f['classification'] == 'testing'])
         }
         
-        completeness_score = 0
-        if architecture["entry_points"] > 0: completeness_score += 20
-        if architecture["api_layers"] > 0: completeness_score += 15
-        if architecture["security_files"] > 0: completeness_score += 25
-        if architecture["test_files"] > 0: completeness_score += 20
-        if architecture["config_files"] > 0: completeness_score += 10
-        if architecture["data_models"] > 0: completeness_score += 10
+        completeness = 0
+        if arch["entry_points"] > 0: completeness += 20
+        if arch["api_layers"] > 0: completeness += 15
+        if arch["security_files"] > 0: completeness += 25
+        if arch["test_files"] > 0: completeness += 20
+        if arch["config_files"] > 0: completeness += 10
+        if arch["data_models"] > 0: completeness += 10
         
-        architecture["completeness_score"] = completeness_score
-        return architecture
+        arch["completeness_score"] = completeness
+        return arch
     
     def _calculate_global_score(self, files_data: List[Dict], cross_analysis: Dict) -> float:
-        """Calcula score global do sistema"""
+        """Calcula score global"""
         if not files_data:
             return 0
         
-        avg_file_score = sum(f['file_score'] for f in files_data) / len(files_data)
+        avg_score = sum(f['file_score'] for f in files_data) / len(files_data)
         cross_penalty = len(cross_analysis.get('cross_risks', [])) * 15
         
         arch_bonus = 0
         if cross_analysis.get('system_architecture', {}).get('completeness_score', 0) > 80:
             arch_bonus = 10
         
-        global_score = avg_file_score + cross_penalty - arch_bonus
-        return max(0, min(100, global_score))
+        return max(0, min(100, avg_score + cross_penalty - arch_bonus))
     
     def _generate_risks_summary(self, files_data: List[Dict]) -> Dict:
-        """Gera resumo dos riscos encontrados"""
+        """Gera resumo dos riscos"""
         all_risks = {}
         
         for risk_id, risk_info in AGENTIC_AI_RISKS.items():
@@ -671,102 +512,85 @@ class CodeFileAnalyzer:
         return all_risks
     
     def _get_recommendations(self, risk_id: str) -> List[str]:
-        """Gera recomendações específicas para cada risco"""
-        recommendations_map = {
-            "1": ["Definir objetivos claros nos comentários", "Implementar validação de metas"],
-            "2": ["Adicionar aprovação humana para ações críticas", "Implementar thresholds"],
-            "3": ["Implementar rate limiting nas APIs", "Usar variáveis de ambiente"],
-            "7": ["Remover funções eval() e exec()", "Implementar validação de entrada"]
+        """Recomendações por risco"""
+        recommendations = {
+            "1": ["Definir objetivos claros", "Implementar validação de metas"],
+            "2": ["Adicionar aprovação humana", "Implementar thresholds"],
+            "3": ["Rate limiting em APIs", "Usar variáveis de ambiente"],
+            "7": ["Remover eval/exec", "Implementar validação de entrada"]
         }
-        return recommendations_map.get(risk_id, ["Implementar melhores práticas de segurança"])
+        return recommendations.get(risk_id, ["Implementar melhores práticas"])
 
-class PDFGenerator:
-    """Gerador de relatórios em PDF para análise de código"""
+class PDFReportGenerator:
+    """Gerador de relatórios PDF usando ReportLab"""
     
-    def __init__(self):
-        # PDF é obrigatório agora
-        if not PDF_AVAILABLE:
-            raise ImportError("FPDF2 é obrigatório para gerar relatórios PDF")
-    
-    def generate_code_analysis_report(self, analysis_result: Dict) -> bytes:
-        """Gera relatório PDF COMPLETO da análise de código"""
+    def generate_report(self, analysis_result: Dict) -> bytes:
+        """Gera relatório PDF completo"""
+        buffer = io.BytesIO()
         
-        pdf = FPDF()
-        pdf.add_page()
+        # Criar documento
+        doc = SimpleDocTemplate(buffer, pagesize=A4)
+        styles = getSampleStyleSheet()
+        story = []
         
-        # === CABEÇALHO PROFISSIONAL ===
-        pdf.set_font("Arial", "B", 20)
-        pdf.set_text_color(30, 58, 138)  # Azul
-        pdf.cell(0, 15, "AgentRisk - Analise de Codigo", 0, 1, 'C')
+        # Título
+        title = Paragraph("AgentRisk - Relatório de Análise de Código", styles['Title'])
+        story.append(title)
+        story.append(Spacer(1, 20))
         
-        pdf.set_font("Arial", "I", 12)
-        pdf.set_text_color(100, 100, 100)  # Cinza
-        pdf.cell(0, 8, "Avaliacao de Riscos em Sistemas de IA Autonoma", 0, 1, 'C')
-        pdf.ln(10)
+        # Informações gerais
+        info_data = [
+            ['Arquivos Analisados:', str(analysis_result['files_analyzed'])],
+            ['Total de Linhas:', f"{analysis_result['total_lines']:,}"],
+            ['Score Global:', f"{analysis_result['global_score']}/100"],
+            ['Nível de Risco:', analysis_result['global_level']],
+            ['Data da Análise:', datetime.datetime.now().strftime('%d/%m/%Y %H:%M')]
+        ]
         
-        # === INFORMAÇÕES GERAIS ===
-        pdf.set_font("Arial", size=11)
-        pdf.set_text_color(0, 0, 0)  # Preto
-        pdf.cell(0, 8, f"Arquivos Analisados: {analysis_result['files_analyzed']}", 0, 1)
-        pdf.cell(0, 8, f"Total de Linhas: {analysis_result['total_lines']:,}", 0, 1)
-        pdf.cell(0, 8, f"Data da Analise: {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}", 0, 1)
-        pdf.cell(0, 8, f"Metodo: {analysis_result.get('analysis_method', 'Analise Multi-Arquivo')}", 0, 1)
-        pdf.ln(10)
+        info_table = Table(info_data, colWidths=[150, 200])
+        info_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), HexColor('#f8f9fa')),
+            ('TEXTCOLOR', (0, 0), (-1, -1), HexColor('#000000')),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+        ]))
         
-        # === SCORE GLOBAL ===
-        pdf.set_font("Arial", "B", 16)
-        pdf.set_text_color(220, 38, 38) if analysis_result['global_score'] >= 70 else pdf.set_text_color(245, 158, 11) if analysis_result['global_score'] >= 40 else pdf.set_text_color(16, 185, 129)
-        pdf.cell(0, 12, f"SCORE GLOBAL: {analysis_result['global_score']}/100", 0, 1, 'C')
+        story.append(info_table)
+        story.append(Spacer(1, 30))
         
-        pdf.set_font("Arial", "B", 14)
-        pdf.cell(0, 10, f"NIVEL DE RISCO: {analysis_result['global_level'].upper()}", 0, 1, 'C')
-        pdf.ln(8)
+        # Score global destacado
+        score_color = '#dc2626' if analysis_result['global_score'] >= 70 else '#f59e0b' if analysis_result['global_score'] >= 40 else '#10b981'
+        score_text = f"<font color='{score_color}' size='16'><b>SCORE GLOBAL: {analysis_result['global_score']}/100</b></font>"
+        score_para = Paragraph(score_text, styles['Normal'])
+        story.append(score_para)
+        story.append(Spacer(1, 20))
         
-        # === RESUMO POR ARQUIVO ===
-        pdf.set_font("Arial", "B", 14)
-        pdf.set_text_color(0, 0, 0)
-        pdf.cell(0, 10, "ANALISE DETALHADA POR ARQUIVO", 0, 1)
-        pdf.set_font("Arial", size=10)
-        pdf.ln(3)
+        # Análise por arquivo
+        story.append(Paragraph("ANÁLISE DETALHADA POR ARQUIVO", styles['Heading2']))
+        story.append(Spacer(1, 10))
         
         for i, file_data in enumerate(analysis_result['files_data'], 1):
-            # Nome do arquivo
-            pdf.set_font("Arial", "B", 11)
-            pdf.cell(0, 8, f"{i}. {file_data['filename']}", 0, 1)
+            file_text = f"<b>{i}. {file_data['filename']}</b><br/>"
+            file_text += f"Score: {file_data['file_score']}/100 | "
+            file_text += f"Tipo: {file_data['file_type']} | "
+            file_text += f"Linhas: {file_data['lines_count']:,}<br/>"
+            file_text += f"Classificação: {file_data['classification']} | "
+            file_text += f"Nível: {file_data['risk_level']}"
             
-            # Detalhes do arquivo
-            pdf.set_font("Arial", size=10)
-            pdf.cell(0, 6, f"   Score: {file_data['file_score']}/100 | Tipo: {file_data['file_type']} | Linhas: {file_data['lines_count']:,}", 0, 1)
-            pdf.cell(0, 6, f"   Classificacao: {file_data['classification']} | Nivel: {file_data['risk_level']}", 0, 1)
-            
-            # Problemas de segurança
             if file_data['security_issues']:
-                pdf.set_text_color(220, 38, 38)  # Vermelho
-                pdf.cell(0, 6, f"   Problemas de Seguranca: {len(file_data['security_issues'])}", 0, 1)
-                pdf.set_text_color(0, 0, 0)  # Preto
+                file_text += f"<br/><font color='red'>Problemas de Segurança: {len(file_data['security_issues'])}</font>"
             
-            pdf.ln(2)
+            file_para = Paragraph(file_text, styles['Normal'])
+            story.append(file_para)
+            story.append(Spacer(1, 10))
         
-        # === ANÁLISE CRUZADA ===
-        if analysis_result.get('cross_analysis', {}).get('risks_found', 0) > 0:
-            pdf.ln(5)
-            pdf.set_font("Arial", "B", 14)
-            pdf.cell(0, 10, "RISCOS CRUZADOS ENTRE ARQUIVOS", 0, 1)
-            pdf.set_font("Arial", size=10)
-            
-            for cross_risk in analysis_result['cross_analysis']['cross_risks']:
-                pdf.set_text_color(220, 38, 38) if cross_risk['severity'] == 'HIGH' else pdf.set_text_color(245, 158, 11)
-                pdf.cell(0, 6, f"- {cross_risk['description']}", 0, 1)
-                pdf.set_text_color(0, 0, 0)
-                pdf.cell(0, 5, f"  Arquivos Afetados: {len(cross_risk['affected_files'])}", 0, 1)
-                pdf.ln(1)
-        
-        # === TOP 5 RISCOS ===
+        # Top riscos
         if 'risks_summary' in analysis_result and analysis_result['risks_summary']:
-            pdf.ln(5)
-            pdf.set_font("Arial", "B", 14)
-            pdf.cell(0, 10, "TOP 5 RISCOS DETECTADOS", 0, 1)
-            pdf.set_font("Arial", size=10)
+            story.append(Spacer(1, 20))
+            story.append(Paragraph("TOP 5 RISCOS DETECTADOS", styles['Heading2']))
+            story.append(Spacer(1, 10))
             
             sorted_risks = sorted(
                 analysis_result['risks_summary'].items(),
@@ -775,177 +599,205 @@ class PDFGenerator:
             )[:5]
             
             for i, (risk_id, risk_data) in enumerate(sorted_risks, 1):
-                # Cor baseada no nível
-                if risk_data['level'] == 'Alto':
-                    pdf.set_text_color(220, 38, 38)
-                elif risk_data['level'] == 'Moderado':
-                    pdf.set_text_color(245, 158, 11)
-                else:
-                    pdf.set_text_color(16, 185, 129)
+                color = '#dc2626' if risk_data['level'] == 'Alto' else '#f59e0b' if risk_data['level'] == 'Moderado' else '#10b981'
+                risk_text = f"<font color='{color}'><b>{i}. {risk_data['nome']}</b></font><br/>"
+                risk_text += f"Score: {risk_data['score']}/100 | Nível: {risk_data['level']}<br/>"
+                risk_text += f"Categoria: {risk_data['categoria']}<br/>"
+                risk_text += f"Arquivos Afetados: {len(risk_data['affected_files'])}"
                 
-                pdf.set_font("Arial", "B", 11)
-                pdf.cell(0, 7, f"{i}. {risk_data['nome']}", 0, 1)
-                
-                pdf.set_font("Arial", size=10)
-                pdf.set_text_color(0, 0, 0)
-                pdf.cell(0, 5, f"   Score: {risk_data['score']}/100 | Nivel: {risk_data['level']} | Categoria: {risk_data['categoria']}", 0, 1)
-                pdf.cell(0, 5, f"   Arquivos Afetados: {len(risk_data['affected_files'])}", 0, 1)
-                
-                # Primera recomendação
                 if risk_data['recommendations']:
-                    pdf.cell(0, 5, f"   Recomendacao: {risk_data['recommendations'][0][:80]}...", 0, 1)
+                    risk_text += f"<br/>Recomendação: {risk_data['recommendations'][0]}"
                 
-                pdf.ln(2)
+                risk_para = Paragraph(risk_text, styles['Normal'])
+                story.append(risk_para)
+                story.append(Spacer(1, 15))
         
-        # === ARQUITETURA DO SISTEMA ===
-        if 'cross_analysis' in analysis_result and 'system_architecture' in analysis_result['cross_analysis']:
-            arch = analysis_result['cross_analysis']['system_architecture']
-            
-            pdf.ln(5)
-            pdf.set_font("Arial", "B", 14)
-            pdf.cell(0, 10, "ARQUITETURA DO SISTEMA", 0, 1)
-            pdf.set_font("Arial", size=10)
-            
-            pdf.cell(0, 6, f"Pontos de Entrada: {arch['entry_points']}", 0, 1)
-            pdf.cell(0, 6, f"Camadas de API: {arch['api_layers']}", 0, 1)
-            pdf.cell(0, 6, f"Modelos de Dados: {arch['data_models']}", 0, 1)
-            pdf.cell(0, 6, f"Arquivos de Seguranca: {arch['security_files']}", 0, 1)
-            pdf.cell(0, 6, f"Configuracoes: {arch['config_files']}", 0, 1)
-            pdf.cell(0, 6, f"Testes: {arch['test_files']}", 0, 1)
-            pdf.cell(0, 8, f"Completude da Arquitetura: {arch.get('completeness_score', 0)}/100", 0, 1)
+        # Rodapé
+        story.append(Spacer(1, 30))
+        footer_text = "Relatório gerado automaticamente pelo AgentRisk<br/>"
+        footer_text += "Baseado no documento 'Agentic AI in Financial Services - IBM Consulting (Maio/2025)'"
+        footer_para = Paragraph(footer_text, styles['Normal'])
+        story.append(footer_para)
         
-        # === RODAPÉ ===
-        pdf.ln(15)
-        pdf.set_font("Arial", "I", 9)
-        pdf.set_text_color(100, 100, 100)
-        pdf.cell(0, 5, f"Relatorio gerado automaticamente pelo AgentRisk v1.0", 0, 1, 'C')
-        pdf.cell(0, 5, f"Baseado no documento 'Agentic AI in Financial Services - IBM Consulting (Maio/2025)'", 0, 1, 'C')
-        pdf.cell(0, 5, f"Para mais informacoes sobre mitigacao de riscos, consulte a analise detalhada", 0, 1, 'C')
-        
-        return pdf.output(dest='S').encode('latin-1')
+        # Gerar PDF
+        doc.build(story)
+        buffer.seek(0)
+        return buffer.getvalue()
+
+# Inicialização
+@st.cache_resource
+def get_analyzer():
+    return CodeAnalyzer(get_openai_client())
 
 @st.cache_resource
-def get_code_analyzer():
-    client = get_openai_client()
-    return CodeFileAnalyzer(client)
-
-@st.cache_resource  
 def get_pdf_generator():
-    return PDFGenerator()
+    return PDFReportGenerator()
 
 def main():
-    """Função principal da aplicação"""
+    """Função principal"""
     
+    # Header
     st.markdown("""
     <div class="main-header">
         <h1>🛡️ AgentRisk</h1>
         <p>Análise de Código para Avaliação de Riscos em IA Autônoma</p>
-        <small>🚀 Streamlit Cloud | Análise Multi-Arquivo</small>
+        <small>Streamlit Cloud | Análise Multi-Arquivo</small>
     </div>
     """, unsafe_allow_html=True)
     
+    # Status
     col1, col2, col3 = st.columns(3)
     with col1:
         client = get_openai_client()
         if client:
             st.success("✅ OpenAI: Ativo")
         else:
-            st.info("ℹ️ OpenAI: Local")
+            st.info("ℹ️ OpenAI: Análise Local")
     
     with col2:
         if PDF_AVAILABLE:
-            st.success("✅ PDF: Obrigatório")
+            st.success("✅ PDF: ReportLab Ativo")
         else:
-            st.error("❌ PDF: ERRO - fpdf2 necessário")
-            
-    with col3:
-        st.success("✅ Análise: 15 Riscos Ativos")
+            st.error("❌ PDF: ReportLab Necessário")
     
+    with col3:
+        st.success("✅ Análise: 15 Riscos")
+    
+    # Sidebar
     with st.sidebar:
         st.header("📋 Menu")
         page = st.selectbox("Escolha:", ["🔍 Análise", "📊 Dashboard", "⚙️ Config"])
+        
+        if 'analysis_result' in st.session_state:
+            result = st.session_state.analysis_result
+            st.markdown("---")
+            st.markdown("**📊 Última Análise**")
+            st.info(f"""
+            📁 Arquivos: {result.get('files_analyzed', 0)}
+            📝 Linhas: {result.get('total_lines', 0):,}
+            🎯 Score: {result.get('global_score', 0)}/100
+            """)
     
+    # Páginas
     if page == "🔍 Análise":
-        show_settings_page()
+        show_analysis_page()
+    elif page == "📊 Dashboard":
+        show_dashboard_page()
+    else:
+        show_config_page()
 
-def show_code_analysis_page():
-    """Página principal de análise de código"""
+def show_analysis_page():
+    """Página de análise de código"""
     
     st.header("🔍 Análise de Código Multi-Arquivo")
     
+    # Se já tem análise, mostrar resultados
     if 'analysis_result' in st.session_state:
-        if st.button("🔄 Nova Análise", type="secondary"):
-            del st.session_state.analysis_result
-            st.rerun()
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            if st.button("🔄 Nova Análise", type="secondary"):
+                del st.session_state.analysis_result
+                st.rerun()
+        with col2:
+            st.write("**Análise concluída - veja os resultados abaixo**")
         
         show_analysis_results(st.session_state.analysis_result)
         return
     
+    # Interface de upload
     st.markdown("### 📤 Upload dos Arquivos do Sistema")
+    st.write("Faça upload dos arquivos de código do seu sistema para análise de riscos.")
     
     uploaded_files = st.file_uploader(
-        "Selecione os arquivos do seu sistema",
+        "Selecione os arquivos",
         accept_multiple_files=True,
-        type=list(SUPPORTED_EXTENSIONS.keys()),
-        help="Arquivos de código, configuração e documentação"
+        type=SUPPORTED_EXTENSIONS,
+        help="Arquivos de código, configuração e documentação suportados"
     )
     
     if uploaded_files:
         st.success(f"✅ {len(uploaded_files)} arquivo(s) carregado(s)")
         
+        # Preview dos arquivos
         with st.expander("📋 Arquivos Carregados", expanded=True):
             for file in uploaded_files:
-                file_ext = os.path.splitext(file.name.lower())[1]
-                file_type = SUPPORTED_EXTENSIONS.get(file_ext, 'Desconhecido')
+                file_ext = os.path.splitext(file.name.lower())[1][1:]
+                file_type = CodeAnalyzer(None)._get_file_type(file_ext)
                 st.write(f"📄 **{file.name}** - {file_type} ({file.size:,} bytes)")
         
+        # Botão de análise
         if st.button("🔍 Analisar Sistema Completo", type="primary", use_container_width=True):
-            with st.spinner("🔄 Analisando arquivos..."):
+            with st.spinner("🔄 Analisando arquivos do sistema..."):
+                # Progress bar
                 progress_bar = st.progress(0)
+                status_text = st.empty()
                 
-                for i in range(100):
-                    progress_bar.progress(i + 1)
+                for i in range(101):
+                    progress_bar.progress(i)
+                    if i < 30:
+                        status_text.text("📖 Lendo arquivos...")
+                    elif i < 60:
+                        status_text.text("🔍 Detectando padrões de risco...")
+                    elif i < 90:
+                        status_text.text("🔗 Análise cruzada...")
+                    else:
+                        status_text.text("📊 Finalizando...")
                 
-                analyzer = get_code_analyzer()
+                # Análise real
+                analyzer = get_analyzer()
                 analysis_result = analyzer.analyze_files(uploaded_files)
                 
                 if 'error' in analysis_result:
                     st.error(f"❌ {analysis_result['error']}")
                     return
                 
+                # Salvar resultado
                 st.session_state.analysis_result = analysis_result
-                st.success("🎉 Análise concluída!")
+                
+                status_text.text("✅ Análise concluída!")
+                st.success("🎉 Análise de código concluída com sucesso!")
                 st.balloons()
                 st.rerun()
     
     else:
+        # Instruções
         st.info("""
         ### 💡 Como Usar
         
-        1. **📁 Selecione os arquivos** do seu sistema
-        2. **🔍 Clique em "Analisar"** para processar
-        3. **📊 Visualize os resultados** detalhados
-        4. **📄 Gere relatórios** em PDF/texto
+        1. **📁 Selecione os arquivos** principais do seu sistema
+        2. **🔍 Clique em "Analisar"** para processar todos os arquivos  
+        3. **📊 Visualize os resultados** detalhados por arquivo
+        4. **📄 Gere relatório PDF** profissional
         
         ### 📋 Tipos Suportados
-        Python, JavaScript, Java, C#, PHP, JSON, YAML, etc.
+        - **Código:** Python, JavaScript, Java, C#, PHP, Ruby, Go, C/C++
+        - **Config:** JSON, YAML, XML
+        - **Outros:** SQL, Markdown, Text
+        
+        ### 🎯 Análise Inclui
+        - ✅ **15 categorias de risco** específicas para IA Autônoma
+        - ✅ **Detecção de vulnerabilidades** de segurança
+        - ✅ **Análise cruzada** entre arquivos  
+        - ✅ **Score global** do sistema
         """)
 
 def show_analysis_results(analysis_result: Dict):
-    """Exibe os resultados da análise de código"""
+    """Mostra resultados da análise"""
     
     st.header("📊 Resultados da Análise")
     
+    # Métricas principais
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("📁 Arquivos", analysis_result['files_analyzed'])
     with col2:
-        st.metric("📝 Linhas", f"{analysis_result['total_lines']:,}")
+        st.metric("📝 Total Linhas", f"{analysis_result['total_lines']:,}")
     with col3:
-        st.metric("🎯 Score", f"{analysis_result['global_score']}/100")
+        st.metric("🎯 Score Global", f"{analysis_result['global_score']}/100")
     with col4:
         st.metric("⏰ Método", "Multi-Arquivo")
     
+    # Score visual
     global_score = analysis_result['global_score']
     global_level = analysis_result['global_level']
     
@@ -956,59 +808,91 @@ def show_analysis_results(analysis_result: Dict):
     <div class="score-container {score_class}">
         <h2>{emoji} Score Global do Sistema</h2>
         <h1>{global_score}/100</h1>
-        <h3>Nível: {global_level}</h3>
+        <h3>Nível de Risco: {global_level}</h3>
     </div>
     """, unsafe_allow_html=True)
     
-    st.subheader("📁 Análise por Arquivo")
+    # Distribuição de riscos
+    col1, col2, col3 = st.columns(3)
+    
+    high_count = sum(1 for f in analysis_result['files_data'] if f['risk_level'] == 'Alto')
+    medium_count = sum(1 for f in analysis_result['files_data'] if f['risk_level'] == 'Moderado')
+    low_count = sum(1 for f in analysis_result['files_data'] if f['risk_level'] == 'Baixo')
+    
+    with col1:
+        st.metric("🔴 Riscos Altos", high_count)
+    with col2:
+        st.metric("🟡 Riscos Moderados", medium_count)
+    with col3:
+        st.metric("🟢 Riscos Baixos", low_count)
+    
+    # Análise por arquivo
+    st.subheader("📁 Análise Detalhada por Arquivo")
     
     for file_data in analysis_result['files_data']:
         risk_class = f"risk-{file_data['risk_level'].lower()}"
         level_emoji = "🟢" if file_data['risk_level'] == "Baixo" else "🟡" if file_data['risk_level'] == "Moderado" else "🔴"
         
         st.markdown(f"""
-        <div class="file-card {risk_class}">
+        <div class="risk-card {risk_class}">
             <h4>{level_emoji} 📄 {file_data['filename']}</h4>
             <p><strong>Score:</strong> {file_data['file_score']}/100 | 
                <strong>Tipo:</strong> {file_data['file_type']} | 
                <strong>Linhas:</strong> {file_data['lines_count']:,}</p>
+            <p><strong>Classificação:</strong> {file_data['classification']}</p>
         </div>
         """, unsafe_allow_html=True)
         
+        # Detalhes expandíveis
         with st.expander(f"🔍 Detalhes - {file_data['filename']}"):
-            col1, col2 = st.columns(2)
+            tab1, tab2, tab3 = st.tabs(["📊 Resumo", "⚠️ Problemas", "🔍 Preview"])
             
-            with col1:
-                st.metric("Score", f"{file_data['file_score']}/100")
-                st.write(f"**Tipo:** {file_data['file_type']}")
+            with tab1:
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Score", f"{file_data['file_score']}/100")
+                    st.write(f"**Tipo:** {file_data['file_type']}")
+                with col2:
+                    st.metric("Linhas", f"{file_data['lines_count']:,}")
+                    st.write(f"**Classificação:** {file_data['classification']}")
             
-            with col2:
-                st.metric("Linhas", f"{file_data['lines_count']:,}")
-                st.write(f"**Classificação:** {file_data['classification']}")
+            with tab2:
+                if file_data['security_issues']:
+                    st.write("**🚨 Problemas de Segurança:**")
+                    for issue in file_data['security_issues']:
+                        severity_color = "🔴" if issue['severity'] == 'HIGH' else "🟡"
+                        st.write(f"{severity_color} **Linha {issue['line']}:** {issue['description']}")
+                        with st.expander(f"Ver código - Linha {issue['line']}"):
+                            st.code(issue['content'])
+                else:
+                    st.success("✅ Nenhum problema crítico detectado")
+                
+                if file_data['critical_lines']:
+                    st.write("**⚠️ Linhas Críticas:**")
+                    for critical in file_data['critical_lines']:
+                        st.write(f"**Linha {critical['line_number']}:** {critical['reason']}")
             
-            if file_data['security_issues']:
-                st.write("**🚨 Problemas de Segurança:**")
-                for issue in file_data['security_issues']:
-                    severity_color = "🔴" if issue['severity'] == 'HIGH' else "🟡"
-                    st.write(f"{severity_color} **Linha {issue['line']}:** {issue['description']}")
-            
-            if file_data['content_preview']:
-                st.write("**📄 Preview:**")
-                st.code(file_data['content_preview'][:500] + "..." if len(file_data['content_preview']) > 500 else file_data['content_preview'])
+            with tab3:
+                if file_data['content_preview']:
+                    st.write("**📄 Preview do Código:**")
+                    st.code(file_data['content_preview'])
     
+    # Análise cruzada
     if 'cross_analysis' in analysis_result and analysis_result['cross_analysis']['risks_found'] > 0:
-        st.subheader("🔗 Análise Cruzada")
+        st.subheader("🔗 Análise Cruzada Entre Arquivos")
         
         for cross_risk in analysis_result['cross_analysis']['cross_risks']:
             severity_color = "🔴" if cross_risk['severity'] == 'HIGH' else "🟡"
             st.warning(f"{severity_color} **{cross_risk['description']}**")
+            st.write(f"**Arquivos afetados:** {', '.join(cross_risk['affected_files'])}")
     
+    # Top riscos
     if 'risks_summary' in analysis_result and analysis_result['risks_summary']:
-        st.subheader("📋 Top Riscos Detectados")
+        st.subheader("📋 Top Riscos de IA Autônoma Detectados")
         
         sorted_risks = sorted(
-            analysis_result['risks_summary'].items(), 
-            key=lambda x: x[1]['score'], 
+            analysis_result['risks_summary'].items(),
+            key=lambda x: x[1]['score'],
             reverse=True
         )[:5]
         
@@ -1017,24 +901,32 @@ def show_analysis_results(analysis_result: Dict):
             
             with st.expander(f"{level_emoji} {risk_id}. {risk_data['nome']} - {risk_data['score']}/100"):
                 st.write(f"**Categoria:** {risk_data['categoria']}")
+                st.write(f"**Nível:** {risk_data['level']}")
                 st.write(f"**Arquivos afetados:** {len(risk_data['affected_files'])}")
+                
+                if risk_data['affected_files']:
+                    st.write("**📁 Arquivos com este risco:**")
+                    for filename in risk_data['affected_files']:
+                        st.write(f"• {filename}")
                 
                 st.write("**💡 Recomendações:**")
                 for i, rec in enumerate(risk_data['recommendations'], 1):
                     st.write(f"{i}. {rec}")
     
+    # Botões de ação
+    st.markdown("---")
     col1, col2, col3 = st.columns(3)
     
     with col1:
         if st.button("📄 Gerar Relatório PDF", use_container_width=True):
-            with st.spinner("Gerando relatório PDF completo..."):
+            with st.spinner("Gerando relatório PDF..."):
                 pdf_generator = get_pdf_generator()
-                pdf_bytes = pdf_generator.generate_code_analysis_report(analysis_result)
+                pdf_bytes = pdf_generator.generate_report(analysis_result)
                 
-                file_name = f"AgentRisk_Report_{analysis_result.get('files_analyzed', 0)}files_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+                file_name = f"AgentRisk_Report_{analysis_result['files_analyzed']}files_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
                 
                 st.download_button(
-                    label="⬇️ Download PDF Completo",
+                    label="⬇️ Download PDF",
                     data=pdf_bytes,
                     file_name=file_name,
                     mime="application/pdf",
@@ -1042,8 +934,8 @@ def show_analysis_results(analysis_result: Dict):
                 )
     
     with col2:
-        if st.button("📊 Dashboard", use_container_width=True):
-            st.session_state.show_dashboard = True 
+        if st.button("📊 Ver Dashboard", use_container_width=True):
+            st.session_state.show_dashboard = True
             st.rerun()
     
     with col3:
@@ -1052,32 +944,33 @@ def show_analysis_results(analysis_result: Dict):
             st.rerun()
 
 def show_dashboard_page():
-    """Dashboard com métricas da análise"""
+    """Dashboard com gráficos"""
     
-    st.header("📊 Dashboard")
+    st.header("📊 Dashboard de Análise")
     
     if 'analysis_result' not in st.session_state:
-        st.warning("⚠️ Nenhuma análise disponível.")
+        st.warning("⚠️ Nenhuma análise disponível. Faça uma análise primeiro.")
+        if st.button("🔙 Voltar para Análise"):
+            st.rerun()
         return
     
     analysis = st.session_state.analysis_result
     
+    # Métricas principais
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         st.metric("Score Global", f"{analysis['global_score']}/100")
-    
     with col2:
-        high_risk_files = len([f for f in analysis['files_data'] if f['risk_level'] == 'Alto'])
-        st.metric("Arquivos Alto Risco", high_risk_files)
-    
+        high_files = len([f for f in analysis['files_data'] if f['risk_level'] == 'Alto'])
+        st.metric("Arquivos Alto Risco", high_files)
     with col3:
-        total_security_issues = sum(len(f['security_issues']) for f in analysis['files_data'])
-        st.metric("Problemas Segurança", total_security_issues)
-    
+        total_issues = sum(len(f['security_issues']) for f in analysis['files_data'])
+        st.metric("Problemas Segurança", total_issues)
     with col4:
         st.metric("Total Linhas", f"{analysis['total_lines']:,}")
     
+    # Gráficos
     col1, col2 = st.columns(2)
     
     with col1:
@@ -1085,7 +978,7 @@ def show_dashboard_page():
         risk_levels = [f['risk_level'] for f in analysis['files_data']]
         risk_counts = {
             'Alto': risk_levels.count('Alto'),
-            'Moderado': risk_levels.count('Moderado'), 
+            'Moderado': risk_levels.count('Moderado'),
             'Baixo': risk_levels.count('Baixo')
         }
         st.bar_chart(risk_counts)
@@ -1098,20 +991,46 @@ def show_dashboard_page():
             type_counts[ftype] = file_types.count(ftype)
         st.bar_chart(type_counts)
     
-    st.subheader("🚨 Top 5 Arquivos Críticos")
+    # Top arquivos críticos
+    st.subheader("🚨 Top 5 Arquivos Mais Críticos")
     
     sorted_files = sorted(analysis['files_data'], key=lambda x: x['file_score'], reverse=True)[:5]
     
     for i, file_data in enumerate(sorted_files, 1):
         level_emoji = "🔴" if file_data['risk_level'] == "Alto" else "🟡" if file_data['risk_level'] == "Moderado" else "🟢"
-        st.write(f"**#{i}** {level_emoji} {file_data['filename']} - {file_data['file_score']}/100")
+        st.write(f"**#{i}** {level_emoji} **{file_data['filename']}** - {file_data['file_score']}/100 ({file_data['file_type']})")
+    
+    # Arquitetura do sistema
+    if 'cross_analysis' in analysis and 'system_architecture' in analysis['cross_analysis']:
+        st.subheader("🏗️ Arquitetura do Sistema")
+        
+        arch = analysis['cross_analysis']['system_architecture']
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Pontos de Entrada", arch['entry_points'])
+            st.metric("APIs", arch['api_layers'])
+        
+        with col2:
+            st.metric("Modelos de Dados", arch['data_models'])
+            st.metric("Segurança", arch['security_files'])
+        
+        with col3:
+            st.metric("Configurações", arch['config_files'])
+            st.metric("Testes", arch['test_files'])
+        
+        completeness = arch.get('completeness_score', 0)
+        st.progress(completeness / 100)
+        st.write(f"**Completude da Arquitetura:** {completeness}/100")
 
-def show_settings_page():
+def show_config_page():
     """Página de configurações"""
     
-    st.header("⚙️ Configurações")
+    st.header("⚙️ Configurações do AgentRisk")
     
-    st.subheader("📊 Status")
+    # Status do sistema
+    st.subheader("📊 Status do Sistema")
     
     col1, col2 = st.columns(2)
     
@@ -1119,34 +1038,56 @@ def show_settings_page():
         client = get_openai_client()
         if client:
             st.success("✅ OpenAI: Configurada")
+            if st.button("🧪 Testar OpenAI"):
+                try:
+                    with st.spinner("Testando..."):
+                        response = client.chat.completions.create(
+                            model="gpt-4o-mini",
+                            messages=[{"role": "user", "content": "Teste"}],
+                            max_tokens=5
+                        )
+                        st.success("✅ Teste bem-sucedido!")
+                except Exception as e:
+                    st.error(f"❌ Erro: {str(e)}")
         else:
             st.warning("⚠️ OpenAI: Não configurada")
+            st.info("Configure OPENAI_API_KEY nos Secrets do Streamlit")
     
     with col2:
         st.info(f"""
-        **Funcionalidades:**
+        **Funcionalidades Ativas:**
         
         ✅ Análise multi-arquivo
-        {'✅' if PDF_AVAILABLE else '⚠️'} Geração PDF
-        ✅ Detecção de riscos
-        ✅ Análise cruzada
+        {'✅' if PDF_AVAILABLE else '❌'} Geração PDF (ReportLab)
+        {'✅' if client else '⚠️'} Análise com IA
+        ✅ Detecção 15 riscos IA
+        ✅ Análise cruzada arquivos
+        ✅ Vulnerabilidades segurança
         """)
     
-    st.subheader("📁 Tipos Suportados")
-    st.write("**Código:** Python, JavaScript, Java, C#, PHP, Ruby, Go")
-    st.write("**Config:** JSON, YAML, XML")
-    st.write("**Outros:** SQL, Markdown, Text")
+    # Informações do sistema
+    st.subheader("📋 Informações")
     
-    if st.button("🗑️ Limpar Análise"):
+    st.info(f"""
+    **AgentRisk v1.0**
+    
+    **Tipos de Arquivo:** {len(SUPPORTED_EXTENSIONS)} suportados
+    **Riscos Analisados:** 15 categorias específicas de IA Autônoma
+    **Baseado em:** IBM Consulting - Agentic AI in Financial Services (Maio/2025)
+    **Deploy:** Streamlit Cloud
+    **Última Atualização:** {datetime.datetime.now().strftime('%d/%m/%Y')}
+    """)
+    
+    # Limpeza
+    st.subheader("🗑️ Gerenciamento")
+    
+    if st.button("🗑️ Limpar Análise Atual"):
         if 'analysis_result' in st.session_state:
             del st.session_state.analysis_result
-            st.success("✅ Limpeza concluída!")
+            st.success("✅ Análise limpa!")
+            st.rerun()
         else:
-            st.info("ℹ️ Nada para limpar")
+            st.info("ℹ️ Nenhuma análise para limpar")
 
 if __name__ == "__main__":
-    main()code_analysis_page()
-    elif page == "📊 Dashboard":
-        show_dashboard_page()
-    else:
-        show_
+    main()
