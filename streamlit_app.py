@@ -5,6 +5,13 @@ import base64
 import io
 from typing import Dict, List, Tuple, Any
 import re
+import osimport streamlit as st
+import json
+import datetime
+import base64
+import io
+from typing import Dict, List, Tuple, Any
+import re
 import zipfile
 import tempfile
 import os
@@ -14,7 +21,8 @@ try:
     from fpdf import FPDF
     PDF_AVAILABLE = True
 except ImportError:
-    PDF_AVAILABLE = False
+    st.error("❌ FPDF2 é obrigatório! Instale: pip install fpdf2")
+    st.stop()
 
 try:
     import openai
@@ -22,12 +30,6 @@ try:
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
-
-try:
-    import magic
-    MAGIC_AVAILABLE = True
-except ImportError:
-    MAGIC_AVAILABLE = False
 
 # Configuração da página
 st.set_page_config(
@@ -562,73 +564,145 @@ class PDFGenerator:
     """Gerador de relatórios em PDF para análise de código"""
     
     def __init__(self):
-        self.pdf_available = PDF_AVAILABLE
+        # PDF é obrigatório agora
+        if not PDF_AVAILABLE:
+            raise ImportError("FPDF2 é obrigatório para gerar relatórios PDF")
     
     def generate_code_analysis_report(self, analysis_result: Dict) -> bytes:
-        """Gera relatório PDF da análise de código"""
+        """Gera relatório PDF COMPLETO da análise de código"""
         
-        if not self.pdf_available:
-            return self._generate_text_report(analysis_result)
+        pdf = FPDF()
+        pdf.add_page()
         
-        try:
-            pdf = FPDF()
-            pdf.add_page()
+        # === CABEÇALHO PROFISSIONAL ===
+        pdf.set_font("Arial", "B", 20)
+        pdf.set_text_color(30, 58, 138)  # Azul
+        pdf.cell(0, 15, "AgentRisk - Analise de Codigo", 0, 1, 'C')
+        
+        pdf.set_font("Arial", "I", 12)
+        pdf.set_text_color(100, 100, 100)  # Cinza
+        pdf.cell(0, 8, "Avaliacao de Riscos em Sistemas de IA Autonoma", 0, 1, 'C')
+        pdf.ln(10)
+        
+        # === INFORMAÇÕES GERAIS ===
+        pdf.set_font("Arial", size=11)
+        pdf.set_text_color(0, 0, 0)  # Preto
+        pdf.cell(0, 8, f"Arquivos Analisados: {analysis_result['files_analyzed']}", 0, 1)
+        pdf.cell(0, 8, f"Total de Linhas: {analysis_result['total_lines']:,}", 0, 1)
+        pdf.cell(0, 8, f"Data da Analise: {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}", 0, 1)
+        pdf.cell(0, 8, f"Metodo: {analysis_result.get('analysis_method', 'Analise Multi-Arquivo')}", 0, 1)
+        pdf.ln(10)
+        
+        # === SCORE GLOBAL ===
+        pdf.set_font("Arial", "B", 16)
+        pdf.set_text_color(220, 38, 38) if analysis_result['global_score'] >= 70 else pdf.set_text_color(245, 158, 11) if analysis_result['global_score'] >= 40 else pdf.set_text_color(16, 185, 129)
+        pdf.cell(0, 12, f"SCORE GLOBAL: {analysis_result['global_score']}/100", 0, 1, 'C')
+        
+        pdf.set_font("Arial", "B", 14)
+        pdf.cell(0, 10, f"NIVEL DE RISCO: {analysis_result['global_level'].upper()}", 0, 1, 'C')
+        pdf.ln(8)
+        
+        # === RESUMO POR ARQUIVO ===
+        pdf.set_font("Arial", "B", 14)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(0, 10, "ANALISE DETALHADA POR ARQUIVO", 0, 1)
+        pdf.set_font("Arial", size=10)
+        pdf.ln(3)
+        
+        for i, file_data in enumerate(analysis_result['files_data'], 1):
+            # Nome do arquivo
+            pdf.set_font("Arial", "B", 11)
+            pdf.cell(0, 8, f"{i}. {file_data['filename']}", 0, 1)
             
-            pdf.set_font("Arial", "B", 18)
-            pdf.cell(0, 15, "AgentRisk - Analise de Codigo", 0, 1, 'C')
+            # Detalhes do arquivo
+            pdf.set_font("Arial", size=10)
+            pdf.cell(0, 6, f"   Score: {file_data['file_score']}/100 | Tipo: {file_data['file_type']} | Linhas: {file_data['lines_count']:,}", 0, 1)
+            pdf.cell(0, 6, f"   Classificacao: {file_data['classification']} | Nivel: {file_data['risk_level']}", 0, 1)
             
-            pdf.set_font("Arial", size=12)
-            pdf.cell(0, 8, f"Arquivos: {analysis_result['files_analyzed']}", 0, 1, 'C')
-            pdf.cell(0, 8, f"Linhas: {analysis_result['total_lines']}", 0, 1, 'C')
-            pdf.cell(0, 8, f"Data: {datetime.datetime.now().strftime('%d/%m/%Y')}", 0, 1, 'C')
-            pdf.ln(10)
+            # Problemas de segurança
+            if file_data['security_issues']:
+                pdf.set_text_color(220, 38, 38)  # Vermelho
+                pdf.cell(0, 6, f"   Problemas de Seguranca: {len(file_data['security_issues'])}", 0, 1)
+                pdf.set_text_color(0, 0, 0)  # Preto
             
+            pdf.ln(2)
+        
+        # === ANÁLISE CRUZADA ===
+        if analysis_result.get('cross_analysis', {}).get('risks_found', 0) > 0:
+            pdf.ln(5)
             pdf.set_font("Arial", "B", 14)
-            pdf.cell(0, 10, "RESUMO EXECUTIVO", 0, 1)
-            pdf.set_font("Arial", size=11)
+            pdf.cell(0, 10, "RISCOS CRUZADOS ENTRE ARQUIVOS", 0, 1)
+            pdf.set_font("Arial", size=10)
             
-            global_score = analysis_result['global_score']
-            pdf.cell(0, 8, f"Score Global: {global_score}/100", 0, 1)
-            pdf.cell(0, 8, f"Nivel: {analysis_result['global_level']}", 0, 1)
-            pdf.ln(8)
+            for cross_risk in analysis_result['cross_analysis']['cross_risks']:
+                pdf.set_text_color(220, 38, 38) if cross_risk['severity'] == 'HIGH' else pdf.set_text_color(245, 158, 11)
+                pdf.cell(0, 6, f"- {cross_risk['description']}", 0, 1)
+                pdf.set_text_color(0, 0, 0)
+                pdf.cell(0, 5, f"  Arquivos Afetados: {len(cross_risk['affected_files'])}", 0, 1)
+                pdf.ln(1)
+        
+        # === TOP 5 RISCOS ===
+        if 'risks_summary' in analysis_result and analysis_result['risks_summary']:
+            pdf.ln(5)
+            pdf.set_font("Arial", "B", 14)
+            pdf.cell(0, 10, "TOP 5 RISCOS DETECTADOS", 0, 1)
+            pdf.set_font("Arial", size=10)
             
-            pdf.set_font("Arial", "B", 12)
-            pdf.cell(0, 10, "ANALISE POR ARQUIVO", 0, 1)
-            pdf.set_font("Arial", size=9)
+            sorted_risks = sorted(
+                analysis_result['risks_summary'].items(),
+                key=lambda x: x[1]['score'],
+                reverse=True
+            )[:5]
             
-            for file_data in analysis_result['files_data'][:5]:
-                pdf.cell(0, 6, f"Arquivo: {file_data['filename']}", 0, 1)
-                pdf.cell(0, 5, f"Score: {file_data['file_score']}/100", 0, 1)
+            for i, (risk_id, risk_data) in enumerate(sorted_risks, 1):
+                # Cor baseada no nível
+                if risk_data['level'] == 'Alto':
+                    pdf.set_text_color(220, 38, 38)
+                elif risk_data['level'] == 'Moderado':
+                    pdf.set_text_color(245, 158, 11)
+                else:
+                    pdf.set_text_color(16, 185, 129)
+                
+                pdf.set_font("Arial", "B", 11)
+                pdf.cell(0, 7, f"{i}. {risk_data['nome']}", 0, 1)
+                
+                pdf.set_font("Arial", size=10)
+                pdf.set_text_color(0, 0, 0)
+                pdf.cell(0, 5, f"   Score: {risk_data['score']}/100 | Nivel: {risk_data['level']} | Categoria: {risk_data['categoria']}", 0, 1)
+                pdf.cell(0, 5, f"   Arquivos Afetados: {len(risk_data['affected_files'])}", 0, 1)
+                
+                # Primera recomendação
+                if risk_data['recommendations']:
+                    pdf.cell(0, 5, f"   Recomendacao: {risk_data['recommendations'][0][:80]}...", 0, 1)
+                
                 pdf.ln(2)
+        
+        # === ARQUITETURA DO SISTEMA ===
+        if 'cross_analysis' in analysis_result and 'system_architecture' in analysis_result['cross_analysis']:
+            arch = analysis_result['cross_analysis']['system_architecture']
             
-            return pdf.output(dest='S').encode('latin-1')
+            pdf.ln(5)
+            pdf.set_font("Arial", "B", 14)
+            pdf.cell(0, 10, "ARQUITETURA DO SISTEMA", 0, 1)
+            pdf.set_font("Arial", size=10)
             
-        except Exception as e:
-            return self._generate_text_report(analysis_result)
-    
-    def _generate_text_report(self, analysis_result: Dict) -> bytes:
-        """Gera relatório em texto como fallback"""
+            pdf.cell(0, 6, f"Pontos de Entrada: {arch['entry_points']}", 0, 1)
+            pdf.cell(0, 6, f"Camadas de API: {arch['api_layers']}", 0, 1)
+            pdf.cell(0, 6, f"Modelos de Dados: {arch['data_models']}", 0, 1)
+            pdf.cell(0, 6, f"Arquivos de Seguranca: {arch['security_files']}", 0, 1)
+            pdf.cell(0, 6, f"Configuracoes: {arch['config_files']}", 0, 1)
+            pdf.cell(0, 6, f"Testes: {arch['test_files']}", 0, 1)
+            pdf.cell(0, 8, f"Completude da Arquitetura: {arch.get('completeness_score', 0)}/100", 0, 1)
         
-        report = f"""
-AGENTRISK - ANÁLISE DE CÓDIGO
-============================
-
-Arquivos: {analysis_result['files_analyzed']}
-Linhas: {analysis_result['total_lines']}
-Score: {analysis_result['global_score']}/100
-Nível: {analysis_result['global_level']}
-Data: {datetime.datetime.now().strftime('%d/%m/%Y')}
-
-ANÁLISE POR ARQUIVO
-==================
-"""
+        # === RODAPÉ ===
+        pdf.ln(15)
+        pdf.set_font("Arial", "I", 9)
+        pdf.set_text_color(100, 100, 100)
+        pdf.cell(0, 5, f"Relatorio gerado automaticamente pelo AgentRisk v1.0", 0, 1, 'C')
+        pdf.cell(0, 5, f"Baseado no documento 'Agentic AI in Financial Services - IBM Consulting (Maio/2025)'", 0, 1, 'C')
+        pdf.cell(0, 5, f"Para mais informacoes sobre mitigacao de riscos, consulte a analise detalhada", 0, 1, 'C')
         
-        for file_data in analysis_result['files_data']:
-            report += f"\n📄 {file_data['filename']}\n"
-            report += f"   Score: {file_data['file_score']}/100\n"
-            report += f"   Tipo: {file_data['file_type']}\n"
-        
-        return report.encode('utf-8')
+        return pdf.output(dest='S').encode('latin-1')
 
 @st.cache_resource
 def get_code_analyzer():
@@ -660,12 +734,12 @@ def main():
     
     with col2:
         if PDF_AVAILABLE:
-            st.success("✅ PDF: Disponível")
+            st.success("✅ PDF: Obrigatório")
         else:
-            st.info("ℹ️ PDF: Texto")
+            st.error("❌ PDF: ERRO - fpdf2 necessário")
             
     with col3:
-        st.success("✅ Análise: Ativo")
+        st.success("✅ Análise: 15 Riscos Ativos")
     
     with st.sidebar:
         st.header("📋 Menu")
@@ -832,24 +906,20 @@ def show_analysis_results(analysis_result: Dict):
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("📄 Gerar Relatório", use_container_width=True):
-            pdf_generator = get_pdf_generator()
-            report_bytes = pdf_generator.generate_code_analysis_report(analysis_result)
-            
-            if PDF_AVAILABLE:
-                file_name = f"AgentRisk_Report_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
-                mime_type = "application/pdf"
-            else:
-                file_name = f"AgentRisk_Report_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.txt"
-                mime_type = "text/plain"
-            
-            st.download_button(
-                label="⬇️ Download",
-                data=report_bytes,
-                file_name=file_name,
-                mime=mime_type,
-                use_container_width=True
-            )
+        if st.button("📄 Gerar Relatório PDF", use_container_width=True):
+            with st.spinner("Gerando relatório PDF completo..."):
+                pdf_generator = get_pdf_generator()
+                pdf_bytes = pdf_generator.generate_code_analysis_report(analysis_result)
+                
+                file_name = f"AgentRisk_Report_{analysis_result.get('files_analyzed', 0)}files_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+                
+                st.download_button(
+                    label="⬇️ Download PDF Completo",
+                    data=pdf_bytes,
+                    file_name=file_name,
+                    mime="application/pdf",
+                    use_container_width=True
+                )
     
     with col2:
         if st.button("📊 Dashboard", use_container_width=True):
