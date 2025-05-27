@@ -1,4 +1,51 @@
-import streamlit as st
+# Timeline de remediação DETALHADA
+        remediation_timeline = compliance.get('remediation_timeline', {})
+        if remediation_timeline:
+            st.subheader("⏰ Timeline Detalhada de Remediação")
+            
+            # Métricas principais
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                immediate = remediation_timeline.get('immediate', 0)
+                st.metric("🚨 Imediato", immediate, help="1-2 semanas - Ação urgente")
+            
+            with col2:
+                short_term = remediation_timeline.get('short_term', 0)
+                st.metric("⚠️ Curto Prazo", short_term, help="2-4 semanas")
+            
+            with col3:
+                medium_term = remediation_timeline.get('medium_term', 0)
+                st.metric("📅 Médio Prazo", medium_term, help="1-3 meses")
+            
+            with col4:
+                total_time = remediation_timeline.get('estimated_total_time', 'N/A')
+                st.metric("⏱️ Tempo Total", total_time)
+            
+            # Detalhes específicos por violação
+            timeline_details = remediation_timeline.get('details', [])
+            if timeline_details:
+                st.markdown("**📋 Detalhamento por Violação:**")
+                
+                for detail in timeline_details[:10]:  # Top 10 mais urgentes
+                    violation = detail.get('violation', 'N/A')
+                    timeline = detail.get('timeline', 'N/A')
+                    reason = detail.get('reason', 'N/A')
+                    penalty = detail.get('penalty_risk', 'N/A')
+                    
+                    # Emoji baseado na urgência
+                    if "Imediato" in timeline:
+                        emoji = "🔴"
+                        alert_type = "error"
+                    elif "Curto" in timeline:
+                        emoji = "🟡"
+                        alert_type = "warning"
+                    else:
+                        emoji = "🟢"
+                        alert_type = "info"
+                    
+                    with st.expander(f"{emoji} {violation} - {timeline}"):
+                        import streamlit as st
 import json
 import datetime
 import base64
@@ -750,73 +797,281 @@ class EnterpriseCodeAnalyzer:
         return violations
     
     async def _ai_compliance_check(self, file_data: Dict, framework: ComplianceFramework, requirements: Dict) -> Dict:
-        """Verificação de compliance com IA"""
+        """Verificação DETALHADA de compliance com IA - Implementação Completa"""
         
         content_preview = file_data.get("content_preview", "")
         filename = file_data.get("filename", "")
+        file_type = file_data.get("file_type", "Unknown")
         
+        # Análise específica e detalhada por framework
         if framework == ComplianceFramework.EU_AI_ACT:
             prompt = f"""
-            Analise este código quanto ao EU AI Act:
+            ANÁLISE ESPECÍFICA EU AI ACT - {filename} ({file_type})
             
-            Arquivo: {filename}
-            Código: {content_preview[:1500]}
+            Código a analisar:
+            {content_preview[:1500]}
             
-            Artigos relevantes do AI Act:
-            - Art. 6: Sistemas de IA de alto risco
-            - Art. 8: Conformidade de sistemas de IA de alto risco  
-            - Art. 9: Sistema de gestão de risco
-            - Art. 13: Transparência e fornecimento de informações
-            - Art. 14: Supervisão humana
-            - Art. 15: Precisão, robustez e cibersegurança
+            Verifique ESPECIFICAMENTE cada artigo:
             
-            Retorne JSON com:
-            - violations: lista de violações encontradas
-            - compliance_score: score 0-100
-            - recommendations: recomendações específicas
+            🔍 Art. 6 - SISTEMAS DE IA DE ALTO RISCO:
+            - Este código implementa sistema de IA que pode afetar decisões financeiras/creditícias?
+            - Há processamento automatizado de dados pessoais para decisões críticas?
+            
+            🔍 Art. 8 - CONFORMIDADE DE SISTEMAS DE ALTO RISCO:  
+            - Existe sistema de gestão da qualidade implementado?
+            - Há documentação técnica adequada?
+            
+            🔍 Art. 9 - SISTEMA DE GESTÃO DE RISCO:
+            - Há identificação e análise de riscos conhecidos?
+            - Existe processo de mitigação de riscos implementado?
+            
+            🔍 Art. 13 - TRANSPARÊNCIA:
+            - O sistema informa aos usuários que estão interagindo com IA?
+            - Há explicações claras sobre como o sistema funciona?
+            
+            🔍 Art. 14 - SUPERVISÃO HUMANA:
+            - Existe supervisão humana efetiva implementada?
+            - Humanos podem intervir nas decisões do sistema?
+            
+            🔍 Art. 15 - PRECISÃO E ROBUSTEZ:
+            - Há validação de dados de entrada?
+            - Existe tratamento de erros e falhas?
+            
+            RETORNE JSON EXATO:
+            {{
+                "violations": [
+                    {{
+                        "article": "Art. X",
+                        "description": "descrição específica da violação",
+                        "severity": "HIGH/MEDIUM/LOW", 
+                        "evidence": ["evidência específica no código"],
+                        "remediation": ["ação específica necessária"],
+                        "penalty_risk": "Até 7% do faturamento anual (€35M máximo)"
+                    }}
+                ],
+                "compliance_score": 0-100,
+                "specific_articles_violated": ["Art. X", "Art. Y"],
+                "recommendations": ["recomendação específica técnica"]
+            }}
             """
         
         elif framework == ComplianceFramework.LGPD_BRAZIL:
             prompt = f"""
-            Analise este código quanto à LGPD:
+            ANÁLISE ESPECÍFICA LGPD BRASIL - {filename} ({file_type})
             
-            Arquivo: {filename}
+            Código a analisar:
+            {content_preview[:1500]}
+            
+            Verifique ESPECIFICAMENTE cada artigo:
+            
+            🔍 Art. 5 - DADOS PESSOAIS:
+            - O código processa informações que identifiquem pessoa natural?
+            - Há tratamento de dados sensíveis (origem racial, saúde, etc.)?
+            
+            🔍 Art. 7 - BASES LEGAIS:
+            - Há base legal clara para o tratamento (consentimento, contrato, etc.)?
+            - O tratamento é necessário para finalidade específica?
+            
+            🔍 Art. 8 - CONSENTIMENTO:
+            - Quando necessário, há obtenção de consentimento livre e informado?
+            - O consentimento pode ser revogado facilmente?
+            
+            🔍 Art. 9 - DADOS SENSÍVEIS:
+            - Há tratamento de dados sensíveis sem consentimento específico?
+            - Existe proteção adicional para dados sensíveis?
+            
+            🔍 Art. 18 - DIREITOS DO TITULAR:
+            - Há implementação dos direitos (acesso, correção, eliminação)?
+            - Existe processo para atender solicitações dos titulares?
+            
+            🔍 Art. 46 - AGENTES DE TRATAMENTO:
+            - Há definição clara de controlador e operador?
+            - Existe DPO (Data Protection Officer) quando necessário?
+            
+            RETORNE JSON EXATO:
+            {{
+                "violations": [
+                    {{
+                        "article": "Art. X",
+                        "description": "descrição específica da violação",
+                        "severity": "HIGH/MEDIUM/LOW",
+                        "evidence": ["evidência específica no código"], 
+                        "remediation": ["ação específica necessária"],
+                        "penalty_risk": "Até R$ 50 milhões por infração"
+                    }}
+                ],
+                "compliance_score": 0-100,
+                "specific_articles_violated": ["Art. X", "Art. Y"],
+                "recommendations": ["recomendação específica técnica"]
+            }}
+            """
+        
+        elif framework == ComplianceFramework.GDPR_EU:
+            prompt = f"""
+            ANÁLISE ESPECÍFICA GDPR - {filename} ({file_type})
+            
+            Verifique artigos específicos:
+            - Art. 6: Base legal para processamento
+            - Art. 7: Condições para consentimento  
+            - Art. 25: Data protection by design
+            - Art. 32: Segurança no processamento
+            - Art. 35: Avaliação de impacto
+            
             Código: {content_preview[:1500]}
             
-            Artigos relevantes da LGPD:
-            - Art. 5: Definições de dados pessoais
-            - Art. 7: Bases legais para tratamento
-            - Art. 8: Consentimento
-            - Art. 9: Dados sensíveis
-            - Art. 18: Direitos do titular
-            - Art. 46: Agentes de tratamento
+            RETORNE JSON com violations específicas, penalty_risk: "Até 4% do faturamento anual (€20M máximo)"
+            """
+        
+        elif framework == ComplianceFramework.SOX_US:
+            prompt = f"""
+            ANÁLISE ESPECÍFICA SOX (Sarbanes-Oxley) - {filename} ({file_type})
             
-            Retorne JSON com:
-            - violations: lista de violações encontradas
-            - compliance_score: score 0-100
-            - recommendations: recomendações específicas
+            Verifique seções específicas:
+            - Seção 302: Responsabilidade executiva
+            - Seção 404: Controles internos
+            - Seção 409: Divulgação em tempo real
+            - Seção 906: Responsabilidade criminal
+            
+            Código: {content_preview[:1500]}
+            
+            RETORNE JSON com violations específicas, penalty_risk: "Multas de até $5M + prisão"
+            """
+        
+        elif framework == ComplianceFramework.BASEL_III:
+            prompt = f"""
+            ANÁLISE ESPECÍFICA BASEL III - {filename} ({file_type})
+            
+            Verifique pilares específicos:
+            - Pilar 1: Requisitos mínimos de capital
+            - Pilar 2: Processo de supervisão
+            - Pilar 3: Disciplina de mercado
+            - Gestão de risco operacional
+            
+            Código: {content_preview[:1500]}
+            
+            RETORNE JSON com violations específicas, penalty_risk: "Sanções regulatórias + perda de licença"
+            """
+        
+        elif framework == ComplianceFramework.PCI_DSS:
+            prompt = f"""
+            ANÁLISE ESPECÍFICA PCI DSS - {filename} ({file_type})
+            
+            Verifique requisitos específicos:
+            - Req. 1: Firewall e configuração de rede
+            - Req. 2: Senhas padrão e parâmetros de segurança
+            - Req. 3: Proteção de dados do portador do cartão
+            - Req. 4: Criptografia na transmissão
+            - Req. 6: Desenvolvimento seguro
+            - Req. 8: Identificação única para acesso
+            
+            Código: {content_preview[:1500]}
+            
+            RETORNE JSON com violations específicas, penalty_risk: "Multas de $50K-$500K por mês"
             """
         
         else:
-            prompt = f"Análise de compliance para {framework.value} - arquivo {filename}"
+            prompt = f"Análise genérica de compliance para {framework.value} - arquivo {filename}"
         
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=600,
+                max_tokens=800,
                 temperature=0.1
             )
             
-            return json.loads(response.choices[0].message.content)
+            result = json.loads(response.choices[0].message.content)
+            
+            # Garantir estrutura padrão
+            if "violations" not in result:
+                result["violations"] = []
+            if "compliance_score" not in result:
+                result["compliance_score"] = 70
+            if "specific_articles_violated" not in result:
+                result["specific_articles_violated"] = []
+            if "recommendations" not in result:
+                result["recommendations"] = []
+            
+            return result
             
         except Exception as e:
+            # Fallback com análise básica real
+            violations = self._basic_compliance_analysis(content_preview, framework, filename)
+            
             return {
-                "violations": [],
-                "compliance_score": 70,
-                "recommendations": ["Análise manual necessária"],
+                "violations": violations,
+                "compliance_score": max(0, 80 - len(violations) * 15),
+                "specific_articles_violated": [v["article"] for v in violations],
+                "recommendations": [f"Revisar {framework.value} manualmente"],
                 "error": str(e)
             }
+    
+    def _basic_compliance_analysis(self, content: str, framework: ComplianceFramework, filename: str) -> List[Dict]:
+        """Análise básica de compliance quando IA falha"""
+        
+        violations = []
+        content_lower = content.lower()
+        
+        if framework == ComplianceFramework.EU_AI_ACT:
+            # Verificações específicas do AI Act
+            if any(term in content_lower for term in ['decision', 'predict', 'classify', 'recommend']):
+                if 'human' not in content_lower and 'approval' not in content_lower:
+                    violations.append({
+                        "article": "Art. 14",
+                        "description": "Sistema de IA sem supervisão humana adequada detectado",
+                        "severity": "HIGH",
+                        "evidence": [f"Decisões automatizadas em {filename}"],
+                        "remediation": ["Implementar supervisão humana", "Adicionar aprovação manual"],
+                        "penalty_risk": "Até 7% do faturamento anual (€35M máximo)"
+                    })
+            
+            if 'transparent' not in content_lower and 'explain' not in content_lower:
+                violations.append({
+                    "article": "Art. 13", 
+                    "description": "Falta de transparência no sistema de IA",
+                    "severity": "MEDIUM",
+                    "evidence": [f"Ausência de explicabilidade em {filename}"],
+                    "remediation": ["Implementar explicabilidade", "Adicionar logs de decisão"],
+                    "penalty_risk": "Até 7% do faturamento anual (€35M máximo)"
+                })
+        
+        elif framework == ComplianceFramework.LGPD_BRAZIL:
+            # Verificações específicas da LGPD
+            if any(term in content_lower for term in ['cpf', 'email', 'phone', 'address', 'personal']):
+                if 'consent' not in content_lower and 'legal_basis' not in content_lower:
+                    violations.append({
+                        "article": "Art. 7",
+                        "description": "Tratamento de dados pessoais sem base legal clara",
+                        "severity": "HIGH", 
+                        "evidence": [f"Dados pessoais processados em {filename}"],
+                        "remediation": ["Definir base legal", "Implementar consentimento"],
+                        "penalty_risk": "Até R$ 50 milhões por infração"
+                    })
+            
+            if any(term in content_lower for term in ['health', 'race', 'religion', 'biometric']):
+                violations.append({
+                    "article": "Art. 9",
+                    "description": "Possível tratamento de dados sensíveis detectado",
+                    "severity": "HIGH",
+                    "evidence": [f"Indícios de dados sensíveis em {filename}"],
+                    "remediation": ["Implementar proteções especiais", "Obter consentimento específico"],
+                    "penalty_risk": "Até R$ 50 milhões por infração"
+                })
+        
+        elif framework == ComplianceFramework.PCI_DSS:
+            # Verificações específicas PCI DSS
+            if any(term in content_lower for term in ['card', 'credit', 'payment', 'pan']):
+                if 'encrypt' not in content_lower and 'hash' not in content_lower:
+                    violations.append({
+                        "article": "Req. 3",
+                        "description": "Dados de cartão sem proteção criptográfica adequada",
+                        "severity": "HIGH",
+                        "evidence": [f"Dados de pagamento não criptografados em {filename}"],
+                        "remediation": ["Implementar criptografia", "Aplicar tokenização"],
+                        "penalty_risk": "Multas de $50K-$500K por mês"
+                    })
+        
+        return violations
     
     async def _enterprise_cross_analysis(self, files_data: List[Dict], system_analysis: Dict) -> Dict:
         """Análise cruzada enterprise entre arquivos"""
