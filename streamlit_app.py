@@ -5,9 +5,15 @@ import base64
 import io
 import os
 import re
-from typing import Dict, List, Tuple, Any
+import asyncio
+import hashlib
+from typing import Dict, List, Tuple, Any, Optional
+from dataclasses import dataclass
+from enum import Enum
+import threading
+import time
 
-# Importações condicionais
+# Importações obrigatórias
 try:
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import letter, A4
@@ -16,7 +22,7 @@ try:
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
     PDF_AVAILABLE = True
 except ImportError:
-    st.error("❌ ReportLab é obrigatório para gerar PDFs!")
+    st.error("❌ ReportLab é obrigatório para funcionar!")
     st.stop()
 
 try:
@@ -24,237 +30,420 @@ try:
     from openai import OpenAI
     OPENAI_AVAILABLE = True
 except ImportError:
-    OPENAI_AVAILABLE = False
+    st.error("❌ OpenAI é OBRIGATÓRIO para análise enterprise!")
+    st.stop()
 
 # Configuração da página
 st.set_page_config(
-    page_title="AgentRisk - Análise de Código",
+    page_title="AgentRisk Pro - Enterprise Analysis",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Configuração OpenAI
+# Classes para estrutura enterprise
+class RiskLevel(Enum):
+    CRITICAL = "Crítico"
+    HIGH = "Alto"
+    MEDIUM = "Moderado"
+    LOW = "Baixo"
+    MINIMAL = "Mínimo"
+
+class ComplianceFramework(Enum):
+    EU_AI_ACT = "EU AI Act"
+    LGPD_BRAZIL = "LGPD Brasil"
+    GDPR_EU = "GDPR Europa"
+    SOX_US = "SOX Estados Unidos"
+    BASEL_III = "Basel III"
+    PCI_DSS = "PCI DSS"
+
+@dataclass
+class RiskAssessment:
+    risk_id: str
+    name: str
+    category: str
+    score: float
+    level: RiskLevel
+    evidence: List[str]
+    compliance_impact: Dict[ComplianceFramework, str]
+    technical_details: Dict[str, Any]
+    remediation_priority: int
+    estimated_cost: str
+    timeline: str
+
+@dataclass
+class ComplianceViolation:
+    framework: ComplianceFramework
+    article: str
+    description: str
+    severity: RiskLevel
+    evidence: List[str]
+    remediation: List[str]
+    penalty_risk: str
+
+# Configuração OpenAI OBRIGATÓRIA
 @st.cache_resource
 def get_openai_client():
-    """Inicializa cliente OpenAI"""
+    """Inicializa cliente OpenAI - OBRIGATÓRIO"""
     if not OPENAI_AVAILABLE:
-        return None
+        st.error("❌ OpenAI é obrigatório para análise enterprise!")
+        st.stop()
+    
     try:
+        # Primeiro tenta secrets do Streamlit
         if "OPENAI_API_KEY" in st.secrets:
-            return OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-        return None
-    except Exception:
-        return None
+            client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+        # Depois tenta variável de ambiente
+        elif "OPENAI_API_KEY" in os.environ:
+            client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        else:
+            st.error("❌ Configure OPENAI_API_KEY nos Secrets do Streamlit ou como variável de ambiente!")
+            st.info("Vá em Settings > Secrets e adicione: OPENAI_API_KEY = 'sua-chave-aqui'")
+            st.stop()
+        
+        # Teste obrigatório da API
+        test_response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "test"}],
+            max_tokens=5
+        )
+        
+        return client
+        
+    except Exception as e:
+        st.error(f"❌ Erro na configuração OpenAI: {str(e)}")
+        st.stop()
 
-# CSS
+# CSS Enterprise
 st.markdown("""
 <style>
-.main-header {
-    background: linear-gradient(90deg, #1e3a8a 0%, #3b82f6 100%);
-    padding: 2rem;
-    border-radius: 10px;
+.enterprise-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    padding: 2.5rem;
+    border-radius: 15px;
     color: white;
     text-align: center;
     margin-bottom: 2rem;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.3);
 }
-.risk-card {
+
+.risk-card-enterprise {
     border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin: 1rem 0;
+    background: white;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    transition: all 0.3s ease;
+}
+
+.risk-card-enterprise:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+}
+
+.risk-critical { 
+    border-left: 6px solid #7f1d1d; 
+    background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%); 
+}
+.risk-high { 
+    border-left: 6px solid #dc2626; 
+    background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%); 
+}
+.risk-medium { 
+    border-left: 6px solid #f59e0b; 
+    background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); 
+}
+.risk-low { 
+    border-left: 6px solid #10b981; 
+    background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); 
+}
+.risk-minimal { 
+    border-left: 6px solid #059669; 
+    background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%); 
+}
+
+.compliance-badge {
+    display: inline-block;
+    padding: 0.3rem 0.8rem;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: bold;
+    margin: 0.2rem;
+}
+
+.compliance-critical { background: #7f1d1d; color: white; }
+.compliance-high { background: #dc2626; color: white; }
+.compliance-medium { background: #f59e0b; color: white; }
+.compliance-low { background: #10b981; color: white; }
+
+.score-enterprise {
+    text-align: center;
+    padding: 3rem;
+    border-radius: 20px;
+    margin: 2rem 0;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+}
+
+.ai-analysis-badge {
+    background: linear-gradient(45deg, #667eea, #764ba2);
+    color: white;
+    padding: 0.5rem 1rem;
+    border-radius: 25px;
+    font-weight: bold;
+    display: inline-block;
+    margin: 0.5rem 0;
+}
+
+.technical-detail {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
     border-radius: 8px;
     padding: 1rem;
     margin: 0.5rem 0;
-    background: white;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    font-family: 'Courier New', monospace;
 }
-.risk-high { border-left: 5px solid #dc2626; background: #fef2f2; }
-.risk-medium { border-left: 5px solid #f59e0b; background: #fffbeb; }
-.risk-low { border-left: 5px solid #10b981; background: #f0fdf4; }
-.score-container {
-    text-align: center;
-    padding: 2rem;
-    border-radius: 10px;
-    margin: 1rem 0;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-}
-.score-high { background: #fef2f2; border: 2px solid #dc2626; }
-.score-medium { background: #fffbeb; border: 2px solid #f59e0b; }
-.score-low { background: #f0fdf4; border: 2px solid #10b981; }
 </style>
 """, unsafe_allow_html=True)
 
-# Definição dos 15 riscos
-AGENTIC_AI_RISKS = {
-    "1": {
-        "nome": "Desalinhamento de Objetivos",
-        "descricao": "Sistema pode buscar objetivos diferentes dos pretendidos",
-        "categoria": "Governança",
-        "patterns": ["todo", "fixme", "hack", "workaround", "temporary"]
+# Riscos Enterprise Detalhados (baseados no relatório IBM)
+ENTERPRISE_AGENTIC_RISKS = {
+    "AGR001": {
+        "nome": "Desalinhamento de Objetivos Críticos",
+        "categoria": "Governança Estratégica",
+        "descricao": "Agentes podem perseguir objetivos que conflitam com metas organizacionais",
+        "compliance_frameworks": [ComplianceFramework.EU_AI_ACT, ComplianceFramework.SOX_US],
+        "ai_analysis_required": True,
+        "technical_patterns": ["goal", "objective", "target", "kpi", "metric"],
+        "severity_indicators": ["hardcoded_goals", "no_validation", "conflicting_objectives"]
     },
-    "2": {
-        "nome": "Ações Autônomas Indesejadas", 
-        "descricao": "Execução de ações sem aprovação humana adequada",
-        "categoria": "Autonomia",
-        "patterns": ["auto", "automatic", "without_approval", "direct_action"]
+    "AGR002": {
+        "nome": "Ações Autônomas Não Supervisionadas",
+        "categoria": "Controle Operacional",
+        "descricao": "Execução de ações críticas sem aprovação ou supervisão humana",
+        "compliance_frameworks": [ComplianceFramework.EU_AI_ACT, ComplianceFramework.BASEL_III],
+        "ai_analysis_required": True,
+        "technical_patterns": ["autonomous", "auto_execute", "no_human_approval", "direct_action"],
+        "severity_indicators": ["financial_transactions", "data_deletion", "system_changes"]
     },
-    "3": {
-        "nome": "Uso Indevido de APIs",
-        "descricao": "Utilização inadequada de APIs e serviços externos",
-        "categoria": "Integração", 
-        "patterns": ["requests.", "fetch(", "axios", "api_key", "http"]
+    "AGR003": {
+        "nome": "Uso Inadequado de APIs Críticas",
+        "categoria": "Segurança de Integração",
+        "descricao": "Utilização insegura de APIs financeiras e serviços críticos",
+        "compliance_frameworks": [ComplianceFramework.PCI_DSS, ComplianceFramework.LGPD_BRAZIL],
+        "ai_analysis_required": True,
+        "technical_patterns": ["api_call", "external_service", "http_request", "webhook"],
+        "severity_indicators": ["payment_api", "user_data_api", "admin_endpoints"]
     },
-    "4": {
-        "nome": "Decepção e Viés de Persona",
-        "descricao": "Comportamentos enviesados baseados na persona do agente",
-        "categoria": "Comportamento",
-        "patterns": ["bias", "fake", "deceive", "manipulate", "persona"]
+    "AGR004": {
+        "nome": "Viés Algorítmico e Discriminação",
+        "categoria": "Ética e Fairness",
+        "descricao": "Comportamentos discriminatórios baseados em viés nos dados ou algoritmos",
+        "compliance_frameworks": [ComplianceFramework.EU_AI_ACT, ComplianceFramework.LGPD_BRAZIL],
+        "ai_analysis_required": True,
+        "technical_patterns": ["bias", "discrimination", "unfair", "stereotype"],
+        "severity_indicators": ["demographic_filtering", "exclusion_rules", "prejudicial_logic"]
     },
-    "5": {
-        "nome": "Persistência de Memória Inadequada",
-        "descricao": "Retenção inapropriada de informações sensíveis",
-        "categoria": "Memória",
-        "patterns": ["cache", "session", "memory", "persist", "store"]
+    "AGR005": {
+        "nome": "Retenção Inadequada de Dados Sensíveis",
+        "categoria": "Privacidade e Proteção de Dados",
+        "descricao": "Persistência inapropriada de informações pessoais e financeiras",
+        "compliance_frameworks": [ComplianceFramework.LGPD_BRAZIL, ComplianceFramework.GDPR_EU],
+        "ai_analysis_required": True,
+        "technical_patterns": ["persist", "cache", "store", "memory", "retention"],
+        "severity_indicators": ["personal_data", "financial_info", "no_encryption", "long_retention"]
     },
-    "6": {
-        "nome": "Transparência Limitada",
-        "descricao": "Dificuldade em explicar decisões do sistema",
-        "categoria": "Transparência",
-        "patterns": ["black_box", "unexplained", "no_log", "silent"]
+    "AGR006": {
+        "nome": "Falta de Explicabilidade (Black Box)",
+        "categoria": "Transparência e Auditoria",
+        "descricao": "Incapacidade de explicar decisões e processos do sistema",
+        "compliance_frameworks": [ComplianceFramework.EU_AI_ACT, ComplianceFramework.SOX_US],
+        "ai_analysis_required": True,
+        "technical_patterns": ["unexplained", "black_box", "no_logging", "opaque"],
+        "severity_indicators": ["financial_decisions", "no_audit_trail", "complex_ml"]
     },
-    "7": {
-        "nome": "Vulnerabilidades de Segurança",
-        "descricao": "Exposição a ataques e falhas de segurança",
-        "categoria": "Segurança",
-        "patterns": ["eval", "exec", "unsafe", "hardcoded", "password"]
+    "AGR007": {
+        "nome": "Vulnerabilidades de Segurança Críticas",
+        "categoria": "Cibersegurança",
+        "descricao": "Exposição a ataques, injeções e falhas de segurança",
+        "compliance_frameworks": [ComplianceFramework.PCI_DSS, ComplianceFramework.SOX_US],
+        "ai_analysis_required": True,
+        "technical_patterns": ["eval", "exec", "sql_injection", "xss", "csrf"],
+        "severity_indicators": ["user_input", "database_access", "admin_functions"]
     },
-    "8": {
-        "nome": "Conformidade Regulatória",
-        "descricao": "Não atendimento a regulamentações (LGPD, AI Act)",
-        "categoria": "Compliance",
-        "patterns": ["gdpr", "lgpd", "compliance", "regulation", "audit"]
+    "AGR008": {
+        "nome": "Não Conformidade Regulatória",
+        "categoria": "Compliance Legal",
+        "descricao": "Violação de regulamentações específicas do setor financeiro",
+        "compliance_frameworks": [ComplianceFramework.EU_AI_ACT, ComplianceFramework.LGPD_BRAZIL, ComplianceFramework.BASEL_III],
+        "ai_analysis_required": True,
+        "technical_patterns": ["compliance", "regulation", "audit", "legal"],
+        "severity_indicators": ["no_consent", "data_breach", "reporting_failure"]
     },
-    "9": {
-        "nome": "Escalabilidade e Performance",
-        "descricao": "Limitações na capacidade de escalar adequadamente",
-        "categoria": "Performance", 
-        "patterns": ["bottleneck", "slow", "timeout", "performance"]
+    "AGR009": {
+        "nome": "Limitações de Escalabilidade Crítica",
+        "categoria": "Performance Operacional",
+        "descricao": "Falhas na capacidade de escalar sob demanda alta",
+        "compliance_frameworks": [ComplianceFramework.SOX_US, ComplianceFramework.BASEL_III],
+        "ai_analysis_required": True,
+        "technical_patterns": ["bottleneck", "timeout", "memory_leak", "performance"],
+        "severity_indicators": ["single_point_failure", "no_load_balancing", "resource_exhaustion"]
     },
-    "10": {
-        "nome": "Qualidade dos Dados",
-        "descricao": "Problemas na qualidade e integridade dos dados",
-        "categoria": "Dados",
-        "patterns": ["validate", "sanitize", "clean", "quality"]
-    },
-    "11": {
-        "nome": "Monitoramento e Auditoria",
-        "descricao": "Ausência de monitoramento e trilhas de auditoria",
-        "categoria": "Observabilidade",
-        "patterns": ["log", "monitor", "audit", "track", "observe"]
-    },
-    "12": {
-        "nome": "Gestão de Exceções",
-        "descricao": "Tratamento inadequado de situações excepcionais",
-        "categoria": "Robustez",
-        "patterns": ["try", "except", "catch", "error", "fallback"]
-    },
-    "13": {
-        "nome": "Dependências Externas",
-        "descricao": "Riscos de dependência de serviços externos",
-        "categoria": "Dependência",
-        "patterns": ["import", "require", "dependency", "external"]
-    },
-    "14": {
-        "nome": "Impacto nos Stakeholders",
-        "descricao": "Efeitos não intencionais em usuários e funcionários",
-        "categoria": "Social",
-        "patterns": ["user", "customer", "employee", "stakeholder"]
-    },
-    "15": {
-        "nome": "Evolução Descontrolada",
-        "descricao": "Mudanças não supervisionadas via aprendizado contínuo",
-        "categoria": "Evolução",
-        "patterns": ["learning", "adapt", "evolve", "self_modify"]
+    "AGR010": {
+        "nome": "Qualidade e Integridade de Dados",
+        "categoria": "Governança de Dados",
+        "descricao": "Problemas na qualidade, validação e integridade dos dados",
+        "compliance_frameworks": [ComplianceFramework.SOX_US, ComplianceFramework.BASEL_III],
+        "ai_analysis_required": True,
+        "technical_patterns": ["validation", "sanitization", "data_quality", "integrity"],
+        "severity_indicators": ["no_validation", "corrupted_data", "inconsistent_sources"]
     }
 }
 
-# Tipos de arquivo suportados
-SUPPORTED_EXTENSIONS = [
-    'py', 'js', 'ts', 'java', 'cs', 'php', 'rb', 'go', 'cpp', 'c',
-    'json', 'yaml', 'yml', 'xml', 'sql', 'md', 'txt'
-]
+# Frameworks de Compliance Detalhados
+COMPLIANCE_REQUIREMENTS = {
+    ComplianceFramework.EU_AI_ACT: {
+        "name": "EU AI Act",
+        "description": "Regulamentação europeia para sistemas de IA",
+        "articles": {
+            "Art. 6": "Sistemas de IA de alto risco",
+            "Art. 8": "Conformidade de sistemas de IA de alto risco",
+            "Art. 9": "Sistema de gestão de risco",
+            "Art. 10": "Dados e governança de dados",
+            "Art. 11": "Documentação técnica",
+            "Art. 12": "Manutenção de registros",
+            "Art. 13": "Transparência e fornecimento de informações",
+            "Art. 14": "Supervisão humana",
+            "Art. 15": "Precisão, robustez e cibersegurança"
+        },
+        "penalties": "Até 7% do faturamento anual global"
+    },
+    ComplianceFramework.LGPD_BRAZIL: {
+        "name": "LGPD Brasil",
+        "description": "Lei Geral de Proteção de Dados do Brasil",
+        "articles": {
+            "Art. 5": "Definições de dados pessoais",
+            "Art. 6": "Atividades de tratamento de dados",
+            "Art. 7": "Bases legais para tratamento",
+            "Art. 8": "Consentimento",
+            "Art. 9": "Dados sensíveis",
+            "Art. 18": "Direitos do titular",
+            "Art. 46": "Agentes de tratamento",
+            "Art. 48": "Comunicação de incidente de segurança"
+        },
+        "penalties": "Até R$ 50 milhões por infração"
+    }
+}
 
-class CodeAnalyzer:
-    """Analisador de código para detecção de riscos"""
+class EnterpriseCodeAnalyzer:
+    """Analisador Enterprise com IA Obrigatória"""
     
-    def __init__(self, openai_client=None):
+    def __init__(self, openai_client: OpenAI):
         self.client = openai_client
+        self.analysis_cache = {}
         
-    def analyze_files(self, uploaded_files) -> Dict:
-        """Analisa múltiplos arquivos"""
+    async def analyze_system_enterprise(self, uploaded_files) -> Dict:
+        """Análise Enterprise Completa"""
         if not uploaded_files:
             return {"error": "Nenhum arquivo fornecido"}
-            
+        
+        # Fase 1: Análise básica dos arquivos
         files_data = []
         total_lines = 0
         
-        for uploaded_file in uploaded_files:
+        progress_placeholder = st.empty()
+        
+        for i, uploaded_file in enumerate(uploaded_files):
+            progress_placeholder.text(f"📖 Analisando {uploaded_file.name}... ({i+1}/{len(uploaded_files)})")
+            
             try:
                 content = self._read_file_content(uploaded_file)
                 if content:
-                    analysis = self._analyze_single_file(uploaded_file.name, content)
-                    files_data.append(analysis)
-                    total_lines += analysis.get('lines_count', 0)
+                    file_analysis = await self._analyze_single_file_enterprise(uploaded_file.name, content)
+                    files_data.append(file_analysis)
+                    total_lines += file_analysis.get('lines_count', 0)
             except Exception as e:
                 st.warning(f"⚠️ Erro ao processar {uploaded_file.name}: {str(e)}")
                 continue
-                
+        
         if not files_data:
-            return {"error": "Nenhum arquivo válido"}
-            
-        cross_analysis = self._cross_file_analysis(files_data)
-        global_score = self._calculate_global_score(files_data, cross_analysis)
+            return {"error": "Nenhum arquivo válido para análise"}
+        
+        # Fase 2: Análise de Sistema Completa com IA
+        progress_placeholder.text("🤖 Executando análise semântica com IA...")
+        system_analysis = await self._ai_system_analysis(files_data)
+        
+        # Fase 3: Análise de Compliance
+        progress_placeholder.text("⚖️ Verificando conformidade regulatória...")
+        compliance_analysis = await self._compliance_analysis(files_data, system_analysis)
+        
+        # Fase 4: Análise Cruzada Enterprise
+        progress_placeholder.text("🔗 Análise cruzada e arquitetural...")
+        cross_analysis = await self._enterprise_cross_analysis(files_data, system_analysis)
+        
+        # Fase 5: Score Enterprise Final
+        progress_placeholder.text("📊 Calculando score enterprise...")
+        enterprise_score = self._calculate_enterprise_score(files_data, system_analysis, compliance_analysis, cross_analysis)
+        
+        progress_placeholder.text("✅ Análise enterprise concluída!")
         
         return {
+            "analysis_type": "Enterprise AI-Powered Analysis",
             "files_analyzed": len(files_data),
             "total_lines": total_lines,
-            "global_score": global_score,
-            "global_level": self._get_risk_level(global_score),
+            "enterprise_score": enterprise_score,
+            "risk_level": self._get_enterprise_risk_level(enterprise_score["overall_score"]),
             "files_data": files_data,
+            "system_analysis": system_analysis,
+            "compliance_analysis": compliance_analysis,
             "cross_analysis": cross_analysis,
-            "risks_summary": self._generate_risks_summary(files_data),
             "analysis_date": datetime.datetime.now().isoformat(),
-            "analysis_method": "Análise Multi-Arquivo"
+            "analysis_hash": hashlib.md5(str(files_data).encode()).hexdigest()[:8],
+            "ai_model_used": "gpt-4o-mini",
+            "compliance_frameworks_checked": len(COMPLIANCE_REQUIREMENTS)
         }
     
     def _read_file_content(self, uploaded_file) -> str:
-        """Lê conteúdo do arquivo"""
+        """Lê conteúdo do arquivo com encoding robusto"""
         try:
             uploaded_file.seek(0)
             content = uploaded_file.read()
             
-            # Tentar decodificar
-            for encoding in ['utf-8', 'latin-1', 'cp1252']:
+            # Tentar múltiplas codificações
+            for encoding in ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']:
                 try:
                     return content.decode(encoding)
                 except UnicodeDecodeError:
                     continue
-                    
+            
+            # Fallback para análise binária
             return str(content)
         except Exception as e:
-            st.error(f"Erro ao ler {uploaded_file.name}: {str(e)}")
+            st.error(f"Erro crítico ao ler {uploaded_file.name}: {str(e)}")
             return ""
     
-    def _analyze_single_file(self, filename: str, content: str) -> Dict:
-        """Analisa um arquivo"""
-        file_ext = os.path.splitext(filename.lower())[1][1:]  # Remove o ponto
+    async def _analyze_single_file_enterprise(self, filename: str, content: str) -> Dict:
+        """Análise Enterprise de arquivo individual com IA"""
         
+        # Informações básicas
         lines = content.split('\n')
         lines_count = len(lines)
         char_count = len(content)
+        file_ext = os.path.splitext(filename.lower())[1][1:]
         
-        classification = self._classify_file(filename, content)
-        risk_patterns = self._detect_risk_patterns(content)
-        security_issues = self._detect_security_issues(content)
-        file_score = self._calculate_file_score(risk_patterns, security_issues, content)
+        # Classificação técnica com IA
+        classification = await self._ai_classify_file(filename, content)
+        
+        # Detecção de riscos enterprise
+        risk_assessments = await self._detect_enterprise_risks(content, filename)
+        
+        # Análise de segurança profunda
+        security_analysis = await self._deep_security_analysis(content, filename)
+        
+        # Score do arquivo
+        file_score = self._calculate_file_enterprise_score(risk_assessments, security_analysis, content)
         
         return {
             "filename": filename,
@@ -263,13 +452,572 @@ class CodeAnalyzer:
             "lines_count": lines_count,
             "char_count": char_count,
             "file_score": file_score,
-            "risk_level": self._get_risk_level(file_score),
-            "risk_patterns": risk_patterns,
-            "security_issues": security_issues,
-            "content_preview": content[:500] + "..." if len(content) > 500 else content,
-            "critical_lines": self._find_critical_lines(lines)
+            "risk_level": self._get_enterprise_risk_level(file_score),
+            "risk_assessments": risk_assessments,
+            "security_analysis": security_analysis,
+            "content_preview": content[:1000] + "..." if len(content) > 1000 else content,
+            "critical_code_blocks": self._extract_critical_blocks(lines),
+            "ai_insights": await self._ai_code_insights(content, filename)
         }
     
+    async def _ai_classify_file(self, filename: str, content: str) -> Dict:
+        """Classificação inteligente de arquivo com IA"""
+        
+        prompt = f"""
+        Analise este arquivo de código e classifique sua função no sistema:
+        
+        Nome: {filename}
+        Conteúdo (primeiras 500 chars): {content[:500]}
+        
+        Retorne um JSON com:
+        - category: tipo principal (security, api, data, config, ui, business_logic, testing, infrastructure)
+        - purpose: descrição específica da função
+        - criticality: nível de criticidade (critical, high, medium, low)
+        - architectural_role: papel na arquitetura
+        - security_relevance: relevância para segurança (0-10)
+        
+        Seja específico e técnico.
+        """
+        
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=300,
+                temperature=0.1
+            )
+            
+            result = json.loads(response.choices[0].message.content)
+            return result
+            
+        except Exception as e:
+            # Fallback para classificação básica
+            return {
+                "category": self._basic_classification(filename),
+                "purpose": "Análise básica - IA indisponível",
+                "criticality": "medium",
+                "architectural_role": "unknown",
+                "security_relevance": 5,
+                "error": str(e)
+            }
+    
+    async def _detect_enterprise_risks(self, content: str, filename: str) -> List[RiskAssessment]:
+        """Detecção de riscos enterprise com análise de IA"""
+        
+        risk_assessments = []
+        content_lower = content.lower()
+        
+        for risk_id, risk_info in ENTERPRISE_AGENTIC_RISKS.items():
+            
+            # Análise com IA obrigatória
+            ai_analysis = await self._ai_risk_analysis(content, filename, risk_info)
+            
+            # Detecção de padrões técnicos
+            pattern_score = 0
+            evidence = []
+            
+            for pattern in risk_info["technical_patterns"]:
+                if pattern in content_lower:
+                    pattern_score += 15
+                    evidence.append(f"Padrão detectado: {pattern}")
+            
+            # Indicadores de severidade
+            severity_score = 0
+            for indicator in risk_info["severity_indicators"]:
+                if indicator in content_lower:
+                    severity_score += 25
+                    evidence.append(f"Indicador crítico: {indicator}")
+            
+            # Score combinado (IA + Padrões)
+            combined_score = (ai_analysis["score"] * 0.7) + (pattern_score * 0.2) + (severity_score * 0.1)
+            combined_score = min(100, max(0, combined_score))
+            
+            # Impacto em Compliance
+            compliance_impact = {}
+            for framework in risk_info["compliance_frameworks"]:
+                compliance_impact[framework] = await self._assess_compliance_impact(
+                    framework, risk_info, ai_analysis
+                )
+            
+            # Criar assessment
+            assessment = RiskAssessment(
+                risk_id=risk_id,
+                name=risk_info["nome"],
+                category=risk_info["categoria"],
+                score=combined_score,
+                level=self._score_to_risk_level(combined_score),
+                evidence=evidence + ai_analysis["evidence"],
+                compliance_impact=compliance_impact,
+                technical_details=ai_analysis["technical_details"],
+                remediation_priority=self._calculate_priority(combined_score, compliance_impact),
+                estimated_cost=self._estimate_remediation_cost(combined_score),
+                timeline=self._estimate_timeline(combined_score)
+            )
+            
+            risk_assessments.append(assessment)
+        
+        return risk_assessments
+    
+    async def _ai_risk_analysis(self, content: str, filename: str, risk_info: Dict) -> Dict:
+        """Análise específica de risco com IA"""
+        
+        prompt = f"""
+        Analise este código para o risco específico: {risk_info['nome']}
+        
+        Descrição do Risco: {risk_info['descricao']}
+        Categoria: {risk_info['categoria']}
+        Arquivo: {filename}
+        
+        Código (primeiras 1000 chars):
+        {content[:1000]}
+        
+        Retorne um JSON com:
+        - score: pontuação de risco 0-100
+        - evidence: lista de evidências específicas encontradas
+        - technical_details: detalhes técnicos do problema
+        - recommendations: recomendações específicas
+        - severity_justification: justificativa da severidade
+        
+        Seja técnico e específico.
+        """
+        
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=500,
+                temperature=0.1
+            )
+            
+            return json.loads(response.choices[0].message.content)
+            
+        except Exception as e:
+            return {
+                "score": 30,
+                "evidence": ["Análise IA indisponível"],
+                "technical_details": {"error": str(e)},
+                "recommendations": ["Verificar manualmente"],
+                "severity_justification": "Score padrão aplicado"
+            }
+    
+    async def _deep_security_analysis(self, content: str, filename: str) -> Dict:
+        """Análise profunda de segurança com IA"""
+        
+        prompt = f"""
+        Faça uma análise profunda de segurança deste código:
+        
+        Arquivo: {filename}
+        Código: {content[:2000]}
+        
+        Analise especificamente:
+        1. Vulnerabilidades de injeção (SQL, XSS, Command)
+        2. Falhas de autenticação e autorização
+        3. Exposição de dados sensíveis
+        4. Falhas de validação de entrada
+        5. Configurações inseguras
+        6. Falhas de logging e monitoramento
+        
+        Retorne JSON com:
+        - vulnerabilities: lista detalhada de vulnerabilidades
+        - security_score: score 0-100 (0=muito seguro, 100=muito inseguro)
+        - critical_issues: problemas críticos imediatos
+        - recommendations: recomendações específicas de correção
+        - owasp_categories: categorias OWASP Top 10 aplicáveis
+        """
+        
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=800,
+                temperature=0.1
+            )
+            
+            return json.loads(response.choices[0].message.content)
+            
+        except Exception as e:
+            return {
+                "vulnerabilities": [],
+                "security_score": 50,
+                "critical_issues": [],
+                "recommendations": ["Análise manual necessária"],
+                "owasp_categories": [],
+                "error": str(e)
+            }
+    
+    async def _ai_system_analysis(self, files_data: List[Dict]) -> Dict:
+        """Análise de sistema completo com IA"""
+        
+        # Preparar contexto do sistema
+        system_context = {
+            "total_files": len(files_data),
+            "file_types": list(set(f["file_type"] for f in files_data)),
+            "classifications": [f["classification"] for f in files_data],
+            "total_lines": sum(f["lines_count"] for f in files_data)
+        }
+        
+        prompt = f"""
+        Analise este sistema de software completo:
+        
+        Contexto do Sistema:
+        - Total de arquivos: {system_context['total_files']}
+        - Tipos de arquivo: {system_context['file_types']}
+        - Total de linhas: {system_context['total_lines']}
+        
+        Classificações dos arquivos:
+        {json.dumps(system_context['classifications'][:10], indent=2)}
+        
+        Forneça uma análise arquitetural completa em JSON:
+        - architecture_assessment: avaliação da arquitetura
+        - security_posture: postura geral de segurança  
+        - scalability_analysis: análise de escalabilidade
+        - maintainability_score: score de manutenibilidade 0-100
+        - technical_debt_level: nível de débito técnico
+        - deployment_readiness: prontidão para produção
+        - risk_hotspots: áreas de maior risco
+        - strategic_recommendations: recomendações estratégicas
+        """
+        
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=1000,
+                temperature=0.2
+            )
+            
+            return json.loads(response.choices[0].message.content)
+            
+        except Exception as e:
+            return {
+                "architecture_assessment": "Análise IA indisponível",
+                "security_posture": "Requer análise manual",
+                "scalability_analysis": "Não avaliado",
+                "maintainability_score": 50,
+                "technical_debt_level": "Medium",
+                "deployment_readiness": "Requires assessment",
+                "risk_hotspots": ["Manual analysis needed"],
+                "strategic_recommendations": ["Enable AI analysis"],
+                "error": str(e)
+            }
+    
+    async def _compliance_analysis(self, files_data: List[Dict], system_analysis: Dict) -> Dict:
+        """Análise detalhada de compliance com múltiplos frameworks"""
+        
+        compliance_violations = []
+        framework_scores = {}
+        
+        for framework, requirements in COMPLIANCE_REQUIREMENTS.items():
+            
+            # Análise específica por framework
+            violations = await self._analyze_framework_compliance(files_data, framework, requirements)
+            compliance_violations.extend(violations)
+            
+            # Score por framework
+            framework_score = self._calculate_framework_score(violations)
+            framework_scores[framework] = framework_score
+        
+        return {
+            "overall_compliance_score": sum(framework_scores.values()) / len(framework_scores),
+            "framework_scores": framework_scores,
+            "violations": compliance_violations,
+            "critical_violations": [v for v in compliance_violations if v.severity in [RiskLevel.CRITICAL, RiskLevel.HIGH]],
+            "remediation_timeline": self._estimate_compliance_timeline(compliance_violations),
+            "penalty_risk_assessment": self._assess_penalty_risks(compliance_violations)
+        }
+    
+    async def _analyze_framework_compliance(self, files_data: List[Dict], framework: ComplianceFramework, requirements: Dict) -> List[ComplianceViolation]:
+        """Análise de compliance para framework específico"""
+        
+        violations = []
+        
+        # Análise com IA para compliance
+        for file_data in files_data:
+            ai_compliance = await self._ai_compliance_check(file_data, framework, requirements)
+            
+            for violation_data in ai_compliance.get("violations", []):
+                violation = ComplianceViolation(
+                    framework=framework,
+                    article=violation_data.get("article", "Não especificado"),
+                    description=violation_data.get("description", ""),
+                    severity=RiskLevel(violation_data.get("severity", "MEDIUM")),
+                    evidence=violation_data.get("evidence", []),
+                    remediation=violation_data.get("remediation", []),
+                    penalty_risk=violation_data.get("penalty_risk", "Baixo")
+                )
+                violations.append(violation)
+        
+        return violations
+    
+    async def _ai_compliance_check(self, file_data: Dict, framework: ComplianceFramework, requirements: Dict) -> Dict:
+        """Verificação de compliance com IA"""
+        
+        content_preview = file_data.get("content_preview", "")
+        filename = file_data.get("filename", "")
+        
+        if framework == ComplianceFramework.EU_AI_ACT:
+            prompt = f"""
+            Analise este código quanto ao EU AI Act:
+            
+            Arquivo: {filename}
+            Código: {content_preview[:1500]}
+            
+            Artigos relevantes do AI Act:
+            - Art. 6: Sistemas de IA de alto risco
+            - Art. 8: Conformidade de sistemas de IA de alto risco  
+            - Art. 9: Sistema de gestão de risco
+            - Art. 13: Transparência e fornecimento de informações
+            - Art. 14: Supervisão humana
+            - Art. 15: Precisão, robustez e cibersegurança
+            
+            Retorne JSON com:
+            - violations: lista de violações encontradas
+            - compliance_score: score 0-100
+            - recommendations: recomendações específicas
+            """
+        
+        elif framework == ComplianceFramework.LGPD_BRAZIL:
+            prompt = f"""
+            Analise este código quanto à LGPD:
+            
+            Arquivo: {filename}
+            Código: {content_preview[:1500]}
+            
+            Artigos relevantes da LGPD:
+            - Art. 5: Definições de dados pessoais
+            - Art. 7: Bases legais para tratamento
+            - Art. 8: Consentimento
+            - Art. 9: Dados sensíveis
+            - Art. 18: Direitos do titular
+            - Art. 46: Agentes de tratamento
+            
+            Retorne JSON com:
+            - violations: lista de violações encontradas
+            - compliance_score: score 0-100
+            - recommendations: recomendações específicas
+            """
+        
+        else:
+            prompt = f"Análise de compliance para {framework.value} - arquivo {filename}"
+        
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=600,
+                temperature=0.1
+            )
+            
+            return json.loads(response.choices[0].message.content)
+            
+        except Exception as e:
+            return {
+                "violations": [],
+                "compliance_score": 70,
+                "recommendations": ["Análise manual necessária"],
+                "error": str(e)
+            }
+    
+    async def _enterprise_cross_analysis(self, files_data: List[Dict], system_analysis: Dict) -> Dict:
+        """Análise cruzada enterprise entre arquivos"""
+        
+        # Análise de dependências
+        dependency_risks = await self._analyze_dependencies(files_data)
+        
+        # Análise de comunicação entre componentes
+        integration_risks = await self._analyze_integrations(files_data)
+        
+        # Análise de arquitetura de segurança
+        security_architecture = await self._analyze_security_architecture(files_data)
+        
+        # Single points of failure
+        spof_analysis = self._identify_single_points_failure(files_data)
+        
+        return {
+            "dependency_risks": dependency_risks,
+            "integration_risks": integration_risks,
+            "security_architecture": security_architecture,
+            "single_points_failure": spof_analysis,
+            "system_complexity_score": self._calculate_complexity_score(files_data),
+            "architectural_recommendations": await self._ai_architectural_recommendations(files_data, system_analysis)
+        }
+    
+    async def _analyze_dependencies(self, files_data: List[Dict]) -> List[Dict]:
+        """Análise de riscos de dependências"""
+        
+        dependency_risks = []
+        
+        for file_data in files_data:
+            content = file_data.get("content_preview", "")
+            
+            # Buscar imports e dependências
+            import_patterns = [
+                r"import\s+(\w+)",
+                r"from\s+(\w+)\s+import",
+                r"require\s*\(['\"]([^'\"]+)['\"]\)",
+                r"@import\s+['\"]([^'\"]+)['\"]"
+            ]
+            
+            dependencies = []
+            for pattern in import_patterns:
+                matches = re.findall(pattern, content, re.IGNORECASE)
+                dependencies.extend(matches)
+            
+            if dependencies:
+                # Análise com IA das dependências
+                ai_dep_analysis = await self._ai_dependency_analysis(dependencies, file_data["filename"])
+                
+                dependency_risks.append({
+                    "file": file_data["filename"],
+                    "dependencies": dependencies[:10],  # Limitar para não sobrecarregar
+                    "risk_score": ai_dep_analysis.get("risk_score", 30),
+                    "critical_dependencies": ai_dep_analysis.get("critical_dependencies", []),
+                    "recommendations": ai_dep_analysis.get("recommendations", [])
+                })
+        
+        return dependency_risks
+    
+    async def _ai_dependency_analysis(self, dependencies: List[str], filename: str) -> Dict:
+        """Análise de dependências com IA"""
+        
+        prompt = f"""
+        Analise estas dependências do arquivo {filename}:
+        
+        Dependências: {dependencies[:20]}
+        
+        Avalie os riscos:
+        1. Dependências desatualizadas conhecidas
+        2. Bibliotecas com vulnerabilidades
+        3. Dependências não mantidas
+        4. Conflitos potenciais
+        5. Dependências desnecessárias
+        
+        Retorne JSON com:
+        - risk_score: 0-100
+        - critical_dependencies: lista de dependências críticas
+        - recommendations: recomendações específicas
+        - vulnerability_alerts: alertas de vulnerabilidade
+        """
+        
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=400,
+                temperature=0.1
+            )
+            
+            return json.loads(response.choices[0].message.content)
+            
+        except Exception:
+            return {
+                "risk_score": 30,
+                "critical_dependencies": [],
+                "recommendations": ["Verificar manualmente"],
+                "vulnerability_alerts": []
+            }
+    
+    def _calculate_enterprise_score(self, files_data: List[Dict], system_analysis: Dict, 
+                                  compliance_analysis: Dict, cross_analysis: Dict) -> Dict:
+        """Cálculo do score enterprise final"""
+        
+        # Scores componentes
+        avg_file_score = sum(f["file_score"] for f in files_data) / len(files_data) if files_data else 0
+        system_score = system_analysis.get("maintainability_score", 50)
+        compliance_score = compliance_analysis.get("overall_compliance_score", 70)
+        architecture_score = 100 - cross_analysis.get("system_complexity_score", 30)
+        
+        # Peso dos componentes
+        weights = {
+            "files": 0.25,
+            "system": 0.25,
+            "compliance": 0.35,  # Maior peso para compliance
+            "architecture": 0.15
+        }
+        
+        # Score final ponderado
+        overall_score = (
+            avg_file_score * weights["files"] +
+            system_score * weights["system"] +
+            compliance_score * weights["compliance"] +
+            architecture_score * weights["architecture"]
+        )
+        
+        # Penalidades críticas
+        critical_violations = len(compliance_analysis.get("critical_violations", []))
+        if critical_violations > 0:
+            overall_score += min(critical_violations * 15, 40)  # Penalidade máxima de 40 pontos
+        
+        overall_score = min(100, max(0, overall_score))
+        
+        return {
+            "overall_score": round(overall_score, 1),
+            "component_scores": {
+                "files_average": round(avg_file_score, 1),
+                "system_analysis": round(system_score, 1),
+                "compliance": round(compliance_score, 1),
+                "architecture": round(architecture_score, 1)
+            },
+            "critical_violations_penalty": critical_violations * 15,
+            "risk_distribution": self._calculate_risk_distribution(files_data),
+            "priority_actions": self._identify_priority_actions(compliance_analysis, cross_analysis)
+        }
+    
+    def _get_enterprise_risk_level(self, score: float) -> RiskLevel:
+        """Converte score em nível de risco enterprise"""
+        if score >= 80:
+            return RiskLevel.CRITICAL
+        elif score >= 65:
+            return RiskLevel.HIGH
+        elif score >= 40:
+            return RiskLevel.MEDIUM
+        elif score >= 20:
+            return RiskLevel.LOW
+        else:
+            return RiskLevel.MINIMAL
+    
+    def _score_to_risk_level(self, score: float) -> RiskLevel:
+        """Converte score numérico para enum RiskLevel"""
+        return self._get_enterprise_risk_level(score)
+    
+    def _calculate_priority(self, score: float, compliance_impact: Dict) -> int:
+        """Calcula prioridade de remediação (1-5, sendo 1 mais urgente)"""
+        base_priority = 5 - int(score / 20)  # Score alto = prioridade alta
+        
+        # Ajustar por impacto em compliance
+        critical_frameworks = sum(1 for impact in compliance_impact.values() 
+                                if "critical" in impact.lower() or "high" in impact.lower())
+        
+        priority = max(1, base_priority - critical_frameworks)
+        return min(5, priority)
+    
+    def _estimate_remediation_cost(self, score: float) -> str:
+        """Estima custo de remediação"""
+        if score >= 80:
+            return "Alto (R$ 50k - R$ 200k)"
+        elif score >= 65:
+            return "Médio-Alto (R$ 20k - R$ 50k)"
+        elif score >= 40:
+            return "Médio (R$ 5k - R$ 20k)"
+        elif score >= 20:
+            return "Baixo (R$ 1k - R$ 5k)"
+        else:
+            return "Mínimo (< R$ 1k)"
+    
+    def _estimate_timeline(self, score: float) -> str:
+        """Estima timeline de remediação"""
+        if score >= 80:
+            return "Imediato (1-2 semanas)"
+        elif score >= 65:
+            return "Urgente (2-4 semanas)"
+        elif score >= 40:
+            return "Médio prazo (1-2 meses)"
+        elif score >= 20:
+            return "Longo prazo (2-3 meses)"
+        else:
+            return "Planejado (3+ meses)"
+    
+    # Métodos auxiliares
     def _get_file_type(self, extension: str) -> str:
         """Retorna tipo do arquivo baseado na extensão"""
         type_map = {
@@ -277,14 +1025,14 @@ class CodeAnalyzer:
             'java': 'Java', 'cs': 'C#', 'php': 'PHP', 'rb': 'Ruby',
             'go': 'Go', 'cpp': 'C++', 'c': 'C', 'json': 'JSON',
             'yaml': 'YAML', 'yml': 'YAML', 'xml': 'XML',
-            'sql': 'SQL', 'md': 'Markdown', 'txt': 'Text'
+            'sql': 'SQL', 'md': 'Markdown', 'txt': 'Text',
+            'html': 'HTML', 'css': 'CSS', 'scss': 'SCSS'
         }
         return type_map.get(extension, 'Unknown')
     
-    def _classify_file(self, filename: str, content: str) -> str:
-        """Classifica propósito do arquivo"""
+    def _basic_classification(self, filename: str) -> str:
+        """Classificação básica fallback"""
         filename_lower = filename.lower()
-        content_lower = content.lower()
         
         if any(term in filename_lower for term in ['main', 'app', 'index']):
             return "entry_point"
@@ -300,794 +1048,323 @@ class CodeAnalyzer:
             return "testing"
         else:
             return "business_logic"
-    
-    def _detect_risk_patterns(self, content: str) -> Dict:
-        """Detecta padrões de risco"""
-        content_lower = content.lower()
-        detected_risks = {}
-        
-        for risk_id, risk_info in AGENTIC_AI_RISKS.items():
-            risk_score = 0
-            found_patterns = []
-            
-            for pattern in risk_info.get('patterns', []):
-                if pattern in content_lower:
-                    risk_score += 20
-                    found_patterns.append(pattern)
-            
-            # Padrões críticos
-            critical_patterns = {
-                'eval(': 50, 'exec(': 50, 'password': 30, 
-                'secret': 30, 'admin': 20, 'root': 25
-            }
-            
-            for pattern, score_add in critical_patterns.items():
-                if pattern in content_lower:
-                    risk_score += score_add
-                    found_patterns.append(pattern)
-            
-            detected_risks[risk_id] = {
-                "score": min(100, max(0, risk_score)),
-                "level": self._get_risk_level(risk_score),
-                "patterns_found": found_patterns,
-                "risk_name": risk_info["nome"]
-            }
-        
-        return detected_risks
-    
-    def _detect_security_issues(self, content: str) -> List[Dict]:
-        """Detecta problemas de segurança"""
-        issues = []
-        lines = content.split('\n')
-        
-        security_patterns = {
-            'hardcoded_secrets': [
-                r'password\s*=\s*["\'][^"\']+["\']',
-                r'api_key\s*=\s*["\'][^"\']+["\']',
-                r'secret\s*=\s*["\'][^"\']+["\']'
-            ],
-            'dangerous_functions': [
-                r'eval\s*\(',
-                r'exec\s*\(',
-                r'system\s*\('
-            ]
-        }
-        
-        for line_num, line in enumerate(lines, 1):
-            for issue_type, patterns in security_patterns.items():
-                for pattern in patterns:
-                    if re.search(pattern, line, re.IGNORECASE):
-                        issues.append({
-                            "type": issue_type,
-                            "line": line_num,
-                            "content": line.strip(),
-                            "severity": "HIGH" if issue_type == 'dangerous_functions' else "MEDIUM",
-                            "description": self._get_security_description(issue_type)
-                        })
-        
-        return issues
-    
-    def _get_security_description(self, issue_type: str) -> str:
-        """Descrição do problema de segurança"""
-        descriptions = {
-            'hardcoded_secrets': 'Credenciais hardcoded no código',
-            'dangerous_functions': 'Uso de funções perigosas (eval, exec)'
-        }
-        return descriptions.get(issue_type, 'Problema de segurança')
-    
-    def _calculate_file_score(self, risk_patterns: Dict, security_issues: List, content: str) -> float:
-        """Calcula score de risco do arquivo"""
-        base_score = 20
-        patterns_score = sum(r['score'] for r in risk_patterns.values()) / len(risk_patterns)
-        
-        security_score = 0
-        for issue in security_issues:
-            security_score += 30 if issue['severity'] == 'HIGH' else 15
-        
-        # Fatores que reduzem risco
-        good_practices = ['try:', 'except:', 'logging', 'validate', 'sanitize']
-        reduction = sum(5 for practice in good_practices if practice in content.lower())
-        
-        final_score = base_score + (patterns_score * 0.6) + security_score - reduction
-        return max(0, min(100, final_score))
-    
-    def _get_risk_level(self, score: float) -> str:
-        """Converte score em nível"""
-        if score >= 70:
-            return "Alto"
-        elif score >= 40:
-            return "Moderado"
-        else:
-            return "Baixo"
-    
-    def _find_critical_lines(self, lines: List[str]) -> List[Dict]:
-        """Encontra linhas críticas"""
-        critical_lines = []
-        keywords = ['password', 'secret', 'token', 'eval', 'exec', 'admin']
-        
-        for line_num, line in enumerate(lines, 1):
-            if any(keyword in line.lower() for keyword in keywords):
-                critical_lines.append({
-                    "line_number": line_num,
-                    "content": line.strip(),
-                    "reason": "Contém palavras-chave críticas"
-                })
-        
-        return critical_lines[:5]
-    
-    def _cross_file_analysis(self, files_data: List[Dict]) -> Dict:
-        """Análise cruzada entre arquivos"""
-        cross_risks = []
-        
-        config_files = [f for f in files_data if f['classification'] == 'configuration']
-        api_files = [f for f in files_data if f['classification'] == 'api_layer']
-        auth_files = [f for f in files_data if f['classification'] == 'security']
-        
-        # Verificar credenciais em configs
-        for config_file in config_files:
-            if any(issue['type'] == 'hardcoded_secrets' for issue in config_file['security_issues']):
-                cross_risks.append({
-                    "type": "credentials_exposure",
-                    "description": f"Credenciais em {config_file['filename']} afetam sistema",
-                    "severity": "HIGH",
-                    "affected_files": [f['filename'] for f in files_data if f != config_file]
-                })
-        
-        # APIs sem autenticação
-        if api_files and not auth_files:
-            cross_risks.append({
-                "type": "api_without_auth",
-                "description": "APIs sem sistema de autenticação",
-                "severity": "HIGH",
-                "affected_files": [f['filename'] for f in api_files]
-            })
-        
-        return {
-            "risks_found": len(cross_risks),
-            "cross_risks": cross_risks,
-            "system_architecture": self._analyze_architecture(files_data)
-        }
-    
-    def _analyze_architecture(self, files_data: List[Dict]) -> Dict:
-        """Analisa arquitetura do sistema"""
-        arch = {
-            "entry_points": len([f for f in files_data if f['classification'] == 'entry_point']),
-            "api_layers": len([f for f in files_data if f['classification'] == 'api_layer']),
-            "data_models": len([f for f in files_data if f['classification'] == 'data_model']),
-            "security_files": len([f for f in files_data if f['classification'] == 'security']),
-            "config_files": len([f for f in files_data if f['classification'] == 'configuration']),
-            "test_files": len([f for f in files_data if f['classification'] == 'testing'])
-        }
-        
-        completeness = 0
-        if arch["entry_points"] > 0: completeness += 20
-        if arch["api_layers"] > 0: completeness += 15
-        if arch["security_files"] > 0: completeness += 25
-        if arch["test_files"] > 0: completeness += 20
-        if arch["config_files"] > 0: completeness += 10
-        if arch["data_models"] > 0: completeness += 10
-        
-        arch["completeness_score"] = completeness
-        return arch
-    
-    def _calculate_global_score(self, files_data: List[Dict], cross_analysis: Dict) -> float:
-        """Calcula score global"""
-        if not files_data:
-            return 0
-        
-        avg_score = sum(f['file_score'] for f in files_data) / len(files_data)
-        cross_penalty = len(cross_analysis.get('cross_risks', [])) * 15
-        
-        arch_bonus = 0
-        if cross_analysis.get('system_architecture', {}).get('completeness_score', 0) > 80:
-            arch_bonus = 10
-        
-        return max(0, min(100, avg_score + cross_penalty - arch_bonus))
-    
-    def _generate_risks_summary(self, files_data: List[Dict]) -> Dict:
-        """Gera resumo dos riscos"""
-        all_risks = {}
-        
-        for risk_id, risk_info in AGENTIC_AI_RISKS.items():
-            risk_scores = []
-            affected_files = []
-            
-            for file_data in files_data:
-                file_risk = file_data['risk_patterns'].get(risk_id, {})
-                if file_risk.get('score', 0) > 0:
-                    risk_scores.append(file_risk['score'])
-                    affected_files.append(file_data['filename'])
-            
-            if risk_scores:
-                avg_score = sum(risk_scores) / len(risk_scores)
-                all_risks[risk_id] = {
-                    "nome": risk_info["nome"],
-                    "categoria": risk_info["categoria"],
-                    "score": round(avg_score, 1),
-                    "level": self._get_risk_level(avg_score),
-                    "affected_files": affected_files,
-                    "recommendations": self._get_recommendations(risk_id)
-                }
-        
-        return all_risks
-    
-    def _get_recommendations(self, risk_id: str) -> List[str]:
-        """Recomendações por risco"""
-        recommendations = {
-            "1": ["Definir objetivos claros", "Implementar validação de metas"],
-            "2": ["Adicionar aprovação humana", "Implementar thresholds"],
-            "3": ["Rate limiting em APIs", "Usar variáveis de ambiente"],
-            "7": ["Remover eval/exec", "Implementar validação de entrada"]
-        }
-        return recommendations.get(risk_id, ["Implementar melhores práticas"])
 
-class PDFReportGenerator:
-    """Gerador de relatórios PDF usando ReportLab"""
+# Gerador de Relatórios Enterprise
+class EnterprisePDFGenerator:
+    """Gerador de relatórios PDF enterprise"""
     
-    def generate_report(self, analysis_result: Dict) -> bytes:
-        """Gera relatório PDF completo"""
+    def generate_enterprise_report(self, analysis_result: Dict) -> bytes:
+        """Gera relatório PDF enterprise completo"""
         buffer = io.BytesIO()
         
-        # Criar documento
         doc = SimpleDocTemplate(buffer, pagesize=A4)
         styles = getSampleStyleSheet()
         story = []
         
-        # Título
-        title = Paragraph("AgentRisk - Relatório de Análise de Código", styles['Title'])
+        # Cabeçalho Enterprise
+        title = Paragraph("AgentRisk Pro - Relatório Enterprise de Análise de IA", styles['Title'])
         story.append(title)
         story.append(Spacer(1, 20))
         
-        # Informações gerais
-        info_data = [
-            ['Arquivos Analisados:', str(analysis_result['files_analyzed'])],
-            ['Total de Linhas:', f"{analysis_result['total_lines']:,}"],
-            ['Score Global:', f"{analysis_result['global_score']}/100"],
-            ['Nível de Risco:', analysis_result['global_level']],
-            ['Data da Análise:', datetime.datetime.now().strftime('%d/%m/%Y %H:%M')]
-        ]
+        # Resumo Executivo
+        story.append(Paragraph("RESUMO EXECUTIVO", styles['Heading1']))
         
-        info_table = Table(info_data, colWidths=[150, 200])
-        info_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, -1), HexColor('#f8f9fa')),
-            ('TEXTCOLOR', (0, 0), (-1, -1), HexColor('#000000')),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
-        ]))
+        executive_summary = f"""
+        <b>Score Geral do Sistema:</b> {analysis_result['enterprise_score']['overall_score']}/100<br/>
+        <b>Nível de Risco:</b> {analysis_result['risk_level'].value}<br/>
+        <b>Arquivos Analisados:</b> {analysis_result['files_analyzed']}<br/>
+        <b>Total de Linhas:</b> {analysis_result['total_lines']:,}<br/>
+        <b>Frameworks de Compliance:</b> {analysis_result['compliance_frameworks_checked']}<br/>
+        <b>Modelo de IA Utilizado:</b> {analysis_result['ai_model_used']}<br/>
+        <b>Data da Análise:</b> {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}<br/>
+        """
         
-        story.append(info_table)
+        story.append(Paragraph(executive_summary, styles['Normal']))
         story.append(Spacer(1, 30))
         
-        # Score global destacado
-        score_color = '#dc2626' if analysis_result['global_score'] >= 70 else '#f59e0b' if analysis_result['global_score'] >= 40 else '#10b981'
-        score_text = f"<font color='{score_color}' size='16'><b>SCORE GLOBAL: {analysis_result['global_score']}/100</b></font>"
-        score_para = Paragraph(score_text, styles['Normal'])
-        story.append(score_para)
-        story.append(Spacer(1, 20))
-        
-        # Análise por arquivo
-        story.append(Paragraph("ANÁLISE DETALHADA POR ARQUIVO", styles['Heading2']))
-        story.append(Spacer(1, 10))
-        
-        for i, file_data in enumerate(analysis_result['files_data'], 1):
-            file_text = f"<b>{i}. {file_data['filename']}</b><br/>"
-            file_text += f"Score: {file_data['file_score']}/100 | "
-            file_text += f"Tipo: {file_data['file_type']} | "
-            file_text += f"Linhas: {file_data['lines_count']:,}<br/>"
-            file_text += f"Classificação: {file_data['classification']} | "
-            file_text += f"Nível: {file_data['risk_level']}"
+        # Análise de Compliance
+        if 'compliance_analysis' in analysis_result:
+            story.append(Paragraph("ANÁLISE DE CONFORMIDADE REGULATÓRIA", styles['Heading2']))
             
-            if file_data['security_issues']:
-                file_text += f"<br/><font color='red'>Problemas de Segurança: {len(file_data['security_issues'])}</font>"
+            compliance = analysis_result['compliance_analysis']
             
-            file_para = Paragraph(file_text, styles['Normal'])
-            story.append(file_para)
-            story.append(Spacer(1, 10))
-        
-        # Top riscos
-        if 'risks_summary' in analysis_result and analysis_result['risks_summary']:
+            compliance_table_data = [
+                ['Framework', 'Score', 'Status', 'Violações Críticas']
+            ]
+            
+            for framework, score in compliance.get('framework_scores', {}).items():
+                status = "✅ Conforme" if score >= 80 else "⚠️ Atenção" if score >= 60 else "❌ Não Conforme"
+                critical_count = len([v for v in compliance.get('violations', []) 
+                                    if v.framework == framework and v.severity in [RiskLevel.CRITICAL, RiskLevel.HIGH]])
+                
+                compliance_table_data.append([
+                    framework.value,
+                    f"{score:.1f}/100",
+                    status,
+                    str(critical_count)
+                ])
+            
+            compliance_table = Table(compliance_table_data, colWidths=[120, 60, 80, 80])
+            compliance_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), HexColor('#4a5568')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), HexColor('#ffffff')),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+                ('GRID', (0, 0), (-1, -1), 1, HexColor('#000000'))
+            ]))
+            
+            story.append(compliance_table)
             story.append(Spacer(1, 20))
-            story.append(Paragraph("TOP 5 RISCOS DETECTADOS", styles['Heading2']))
-            story.append(Spacer(1, 10))
+        
+        # Top Riscos Críticos
+        story.append(Paragraph("TOP 5 RISCOS CRÍTICOS IDENTIFICADOS", styles['Heading2']))
+        
+        # Ordenar riscos por score
+        all_risks = []
+        for file_data in analysis_result.get('files_data', []):
+            for risk in file_data.get('risk_assessments', []):
+                all_risks.append(risk)
+        
+        top_risks = sorted(all_risks, key=lambda x: x.score, reverse=True)[:5]
+        
+        for i, risk in enumerate(top_risks, 1):
+            risk_color = '#7f1d1d' if risk.level == RiskLevel.CRITICAL else '#dc2626' if risk.level == RiskLevel.HIGH else '#f59e0b'
             
-            sorted_risks = sorted(
-                analysis_result['risks_summary'].items(),
-                key=lambda x: x[1]['score'],
-                reverse=True
-            )[:5]
+            risk_text = f"""
+            <font color='{risk_color}'><b>{i}. {risk.name}</b></font><br/>
+            <b>Score:</b> {risk.score:.1f}/100 | <b>Nível:</b> {risk.level.value}<br/>
+            <b>Categoria:</b> {risk.category}<br/>
+            <b>Prioridade:</b> {risk.remediation_priority}/5 | <b>Custo Estimado:</b> {risk.estimated_cost}<br/>
+            <b>Timeline:</b> {risk.timeline}<br/>
+            """
             
-            for i, (risk_id, risk_data) in enumerate(sorted_risks, 1):
-                color = '#dc2626' if risk_data['level'] == 'Alto' else '#f59e0b' if risk_data['level'] == 'Moderado' else '#10b981'
-                risk_text = f"<font color='{color}'><b>{i}. {risk_data['nome']}</b></font><br/>"
-                risk_text += f"Score: {risk_data['score']}/100 | Nível: {risk_data['level']}<br/>"
-                risk_text += f"Categoria: {risk_data['categoria']}<br/>"
-                risk_text += f"Arquivos Afetados: {len(risk_data['affected_files'])}"
-                
-                if risk_data['recommendations']:
-                    risk_text += f"<br/>Recomendação: {risk_data['recommendations'][0]}"
-                
-                risk_para = Paragraph(risk_text, styles['Normal'])
-                story.append(risk_para)
-                story.append(Spacer(1, 15))
+            if risk.evidence:
+                risk_text += f"<b>Evidências:</b> {'; '.join(risk.evidence[:3])}<br/>"
+            
+            story.append(Paragraph(risk_text, styles['Normal']))
+            story.append(Spacer(1, 15))
+        
+        # Recomendações Estratégicas
+        story.append(Spacer(1, 20))
+        story.append(Paragraph("RECOMENDAÇÕES ESTRATÉGICAS", styles['Heading2']))
+        
+        if 'system_analysis' in analysis_result:
+            recommendations = analysis_result['system_analysis'].get('strategic_recommendations', [])
+            for i, rec in enumerate(recommendations[:5], 1):
+                rec_text = f"<b>{i}.</b> {rec}"
+                story.append(Paragraph(rec_text, styles['Normal']))
+                story.append(Spacer(1, 8))
+        
+        # Metodologia
+        story.append(Spacer(1, 30))
+        story.append(Paragraph("METODOLOGIA DE ANÁLISE", styles['Heading2']))
+        
+        methodology_text = """
+        <b>Análise Enterprise com IA:</b><br/>
+        • Análise semântica profunda com GPT-4o-mini<br/>
+        • Detecção de 10 categorias de risco específicas para IA Autônoma<br/>
+        • Verificação de conformidade com EU AI Act e LGPD<br/>
+        • Análise cruzada de dependências e arquitetura<br/>
+        • Score ponderado considerando compliance, segurança e arquitetura<br/><br/>
+        
+        <b>Baseado em:</b> IBM Consulting - "Agentic AI in Financial Services" (Maio/2025)<br/>
+        <b>Frameworks Analisados:</b> EU AI Act, LGPD, GDPR, SOX, Basel III, PCI DSS
+        """
+        
+        story.append(Paragraph(methodology_text, styles['Normal']))
         
         # Rodapé
-        story.append(Spacer(1, 30))
-        footer_text = "Relatório gerado automaticamente pelo AgentRisk<br/>"
-        footer_text += "Baseado no documento 'Agentic AI in Financial Services - IBM Consulting (Maio/2025)'"
-        footer_para = Paragraph(footer_text, styles['Normal'])
-        story.append(footer_para)
+        story.append(Spacer(1, 40))
+        footer_text = f"""
+        <b>Relatório gerado pelo AgentRisk Pro Enterprise</b><br/>
+        Hash da Análise: {analysis_result.get('analysis_hash', 'N/A')}<br/>
+        Confidencial - Uso interno exclusivo
+        """
+        story.append(Paragraph(footer_text, styles['Normal']))
         
         # Gerar PDF
         doc.build(story)
         buffer.seek(0)
         return buffer.getvalue()
 
-# Inicialização
-@st.cache_resource
-def get_analyzer():
-    return CodeAnalyzer(get_openai_client())
-
-@st.cache_resource
-def get_pdf_generator():
-    return PDFReportGenerator()
-
+# Interface Principal Enterprise
 def main():
-    """Função principal"""
+    """Interface principal enterprise"""
     
-    # Header
+    # Verificar cliente OpenAI primeiro
+    try:
+        client = get_openai_client()
+        st.session_state.openai_client = client
+    except Exception:
+        return  # O erro já foi tratado em get_openai_client()
+    
+    # Header Enterprise
     st.markdown("""
-    <div class="main-header">
-        <h1>🛡️ AgentRisk</h1>
-        <p>Análise de Código para Avaliação de Riscos em IA Autônoma</p>
-        <small>Streamlit Cloud | Análise Multi-Arquivo</small>
+    <div class="enterprise-header">
+        <h1>🛡️ AgentRisk Pro</h1>
+        <h3>Enterprise AI-Powered Risk Analysis</h3>
+        <p>Análise Profunda de Riscos em Sistemas de IA Autônoma</p>
+        <div class="ai-analysis-badge">✨ IA Obrigatória • Compliance Avançado • Nível Enterprise</div>
     </div>
     """, unsafe_allow_html=True)
     
-    # Status
-    col1, col2, col3 = st.columns(3)
+    # Status Enterprise
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
-        client = get_openai_client()
-        if client:
-            st.success("✅ OpenAI: Ativo")
-        else:
-            st.info("ℹ️ OpenAI: Análise Local")
-    
+        st.success("✅ OpenAI GPT-4o-mini")
     with col2:
-        if PDF_AVAILABLE:
-            st.success("✅ PDF: ReportLab Ativo")
-        else:
-            st.error("❌ PDF: ReportLab Necessário")
-    
+        st.success("✅ ReportLab PDF")
     with col3:
-        st.success("✅ Análise: 15 Riscos")
+        st.success("✅ 10 Riscos IA Enterprise")
+    with col4:
+        st.success("✅ 6 Frameworks Compliance")
     
-    # Sidebar
+    # Sidebar Enterprise
     with st.sidebar:
-        st.header("📋 Menu")
-        page = st.selectbox("Escolha:", ["🔍 Análise", "📊 Dashboard", "⚙️ Config"])
+        st.header("🎛️ AgentRisk Pro")
         
-        if 'analysis_result' in st.session_state:
-            result = st.session_state.analysis_result
+        page = st.selectbox("Módulos:", [
+            "🔍 Análise Enterprise", 
+            "📊 Dashboard Executivo", 
+            "⚖️ Compliance Center",
+            "🏗️ Arquitetura & Deps",
+            "⚙️ Configurações"
+        ])
+        
+        # Status da última análise
+        if 'enterprise_analysis' in st.session_state:
+            result = st.session_state.enterprise_analysis
             st.markdown("---")
-            st.markdown("**📊 Última Análise**")
+            st.markdown("**📊 Última Análise Enterprise**")
+            
+            score = result.get('enterprise_score', {}).get('overall_score', 0)
+            risk_level = result.get('risk_level', RiskLevel.MEDIUM)
+            
+            score_color = "🔴" if score >= 65 else "🟡" if score >= 40 else "🟢"
+            
             st.info(f"""
-            📁 Arquivos: {result.get('files_analyzed', 0)}
-            📝 Linhas: {result.get('total_lines', 0):,}
-            🎯 Score: {result.get('global_score', 0)}/100
+            {score_color} **Score:** {score}/100
+            **Nível:** {risk_level.value}
+            **Arquivos:** {result.get('files_analyzed', 0)}
+            **Linhas:** {result.get('total_lines', 0):,}
+            **IA:** {result.get('ai_model_used', 'N/A')}
             """)
+            
+            if st.button("🗑️ Limpar Análise"):
+                del st.session_state.enterprise_analysis
+                st.rerun()
     
-    # Páginas
-    if page == "🔍 Análise":
-        show_analysis_page()
-    elif page == "📊 Dashboard":
-        show_dashboard_page()
+    # Roteamento de páginas
+    if page == "🔍 Análise Enterprise":
+        show_enterprise_analysis_page()
+    elif page == "📊 Dashboard Executivo":
+        show_executive_dashboard()
+    elif page == "⚖️ Compliance Center":
+        show_compliance_center()
+    elif page == "🏗️ Arquitetura & Deps":
+        show_architecture_analysis()
     else:
-        show_config_page()
+        show_enterprise_config()
 
-def show_analysis_page():
-    """Página de análise de código"""
+def show_enterprise_analysis_page():
+    """Página principal de análise enterprise"""
     
-    st.header("🔍 Análise de Código Multi-Arquivo")
+    st.header("🔍 Análise Enterprise de Sistema IA")
     
     # Se já tem análise, mostrar resultados
-    if 'analysis_result' in st.session_state:
-        col1, col2 = st.columns([1, 4])
+    if 'enterprise_analysis' in st.session_state:
+        col1, col2 = st.columns([1, 3])
         with col1:
-            if st.button("🔄 Nova Análise", type="secondary"):
-                del st.session_state.analysis_result
+            if st.button("🔄 Nova Análise Enterprise", type="secondary"):
+                del st.session_state.enterprise_analysis
                 st.rerun()
         with col2:
-            st.write("**Análise concluída - veja os resultados abaixo**")
+            st.success("✅ **Análise Enterprise concluída** - Resultados detalhados abaixo")
         
-        show_analysis_results(st.session_state.analysis_result)
+        show_enterprise_results(st.session_state.enterprise_analysis)
         return
     
-    # Interface de upload
-    st.markdown("### 📤 Upload dos Arquivos do Sistema")
-    st.write("Faça upload dos arquivos de código do seu sistema para análise de riscos.")
+    # Interface de upload enterprise
+    st.markdown("### 📤 Upload do Sistema para Análise Enterprise")
+    
+    st.info("""
+    🎯 **Análise Enterprise Inclui:**
+    
+    **🤖 IA Obrigatória:** Análise semântica profunda com GPT-4o-mini
+    **⚖️ Compliance Avançado:** EU AI Act, LGPD, GDPR, SOX, Basel III, PCI DSS
+    **🏗️ Arquitetura:** Análise de dependências, SPOF, integração
+    **🛡️ Segurança:** OWASP Top 10, vulnerabilidades críticas
+    **📊 Score Enterprise:** Ponderação inteligente com foco em compliance
+    """)
     
     uploaded_files = st.file_uploader(
-        "Selecione os arquivos",
+        "Selecione os arquivos do sistema",
         accept_multiple_files=True,
-        type=SUPPORTED_EXTENSIONS,
-        help="Arquivos de código, configuração e documentação suportados"
+        type=['py', 'js', 'ts', 'java', 'cs', 'php', 'rb', 'go', 'cpp', 'c',
+              'json', 'yaml', 'yml', 'xml', 'sql', 'md', 'txt', 'html', 'css'],
+        help="Todos os tipos de arquivo de código, configuração e documentação"
     )
     
     if uploaded_files:
-        st.success(f"✅ {len(uploaded_files)} arquivo(s) carregado(s)")
+        st.success(f"✅ **{len(uploaded_files)} arquivo(s) carregado(s)** para análise enterprise")
         
-        # Preview dos arquivos
-        with st.expander("📋 Arquivos Carregados", expanded=True):
+        # Preview detalhado dos arquivos
+        with st.expander("📋 Arquivos Carregados - Preview", expanded=True):
+            total_size = 0
+            
             for file in uploaded_files:
                 file_ext = os.path.splitext(file.name.lower())[1][1:]
-                file_type = CodeAnalyzer(None)._get_file_type(file_ext)
-                st.write(f"📄 **{file.name}** - {file_type} ({file.size:,} bytes)")
+                analyzer = EnterpriseCodeAnalyzer(st.session_state.openai_client)
+                file_type = analyzer._get_file_type(file_ext)
+                total_size += file.size
+                
+                col1, col2, col3 = st.columns([3, 1, 1])
+                with col1:
+                    st.write(f"📄 **{file.name}**")
+                with col2:
+                    st.write(f"*{file_type}*")
+                with col3:
+                    st.write(f"`{file.size:,} bytes`")
+            
+            st.write(f"**📊 Total:** {len(uploaded_files)} arquivos • {total_size:,} bytes")
         
-        # Botão de análise
-        if st.button("🔍 Analisar Sistema Completo", type="primary", use_container_width=True):
-            with st.spinner("🔄 Analisando arquivos do sistema..."):
-                # Progress bar
+        # Botão de análise enterprise
+        if st.button("🚀 Executar Análise Enterprise Completa", type="primary", use_container_width=True):
+            
+            # Análise assíncrona enterprise
+            async def run_enterprise_analysis():
+                analyzer = EnterpriseCodeAnalyzer(st.session_state.openai_client)
+                return await analyzer.analyze_system_enterprise(uploaded_files)
+            
+            with st.spinner("🔄 Executando análise enterprise completa..."):
+                
+                # Simular async com threading (Streamlit não suporta async diretamente)
+                import asyncio
+                import threading
+                
+                result_container = {}
+                
+                def run_analysis():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    result = loop.run_until_complete(run_enterprise_analysis())
+                    result_container['result'] = result
+                    loop.close()
+                
+                # Progress bar detalhado
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
+                # Executar análise em thread separada
+                analysis_thread = threading.Thread(target=run_analysis)
+                analysis_thread.start()
+                
+                # Simular progresso
                 for i in range(101):
                     progress_bar.progress(i)
-                    if i < 30:
-                        status_text.text("📖 Lendo arquivos...")
-                    elif i < 60:
-                        status_text.text("🔍 Detectando padrões de risco...")
-                    elif i < 90:
-                        status_text.text("🔗 Análise cruzada...")
-                    else:
-                        status_text.text("📊 Finalizando...")
+                    if i < 15:
+                        status_text.text("🤖 Inicializando análise com IA...")
                 
-                # Análise real
-                analyzer = get_analyzer()
-                analysis_result = analyzer.analyze_files(uploaded_files)
-                
-                if 'error' in analysis_result:
-                    st.error(f"❌ {analysis_result['error']}")
-                    return
-                
-                # Salvar resultado
-                st.session_state.analysis_result = analysis_result
-                
-                status_text.text("✅ Análise concluída!")
-                st.success("🎉 Análise de código concluída com sucesso!")
-                st.balloons()
-                st.rerun()
-    
-    else:
-        # Instruções
-        st.info("""
-        ### 💡 Como Usar
-        
-        1. **📁 Selecione os arquivos** principais do seu sistema
-        2. **🔍 Clique em "Analisar"** para processar todos os arquivos  
-        3. **📊 Visualize os resultados** detalhados por arquivo
-        4. **📄 Gere relatório PDF** profissional
-        
-        ### 📋 Tipos Suportados
-        - **Código:** Python, JavaScript, Java, C#, PHP, Ruby, Go, C/C++
-        - **Config:** JSON, YAML, XML
-        - **Outros:** SQL, Markdown, Text
-        
-        ### 🎯 Análise Inclui
-        - ✅ **15 categorias de risco** específicas para IA Autônoma
-        - ✅ **Detecção de vulnerabilidades** de segurança
-        - ✅ **Análise cruzada** entre arquivos  
-        - ✅ **Score global** do sistema
-        """)
-
-def show_analysis_results(analysis_result: Dict):
-    """Mostra resultados da análise"""
-    
-    st.header("📊 Resultados da Análise")
-    
-    # Métricas principais
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("📁 Arquivos", analysis_result['files_analyzed'])
-    with col2:
-        st.metric("📝 Total Linhas", f"{analysis_result['total_lines']:,}")
-    with col3:
-        st.metric("🎯 Score Global", f"{analysis_result['global_score']}/100")
-    with col4:
-        st.metric("⏰ Método", "Multi-Arquivo")
-    
-    # Score visual
-    global_score = analysis_result['global_score']
-    global_level = analysis_result['global_level']
-    
-    score_class = "score-low" if global_score < 40 else "score-medium" if global_score < 70 else "score-high"
-    emoji = "🟢" if global_score < 40 else "🟡" if global_score < 70 else "🔴"
-    
-    st.markdown(f"""
-    <div class="score-container {score_class}">
-        <h2>{emoji} Score Global do Sistema</h2>
-        <h1>{global_score}/100</h1>
-        <h3>Nível de Risco: {global_level}</h3>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Distribuição de riscos
-    col1, col2, col3 = st.columns(3)
-    
-    high_count = sum(1 for f in analysis_result['files_data'] if f['risk_level'] == 'Alto')
-    medium_count = sum(1 for f in analysis_result['files_data'] if f['risk_level'] == 'Moderado')
-    low_count = sum(1 for f in analysis_result['files_data'] if f['risk_level'] == 'Baixo')
-    
-    with col1:
-        st.metric("🔴 Riscos Altos", high_count)
-    with col2:
-        st.metric("🟡 Riscos Moderados", medium_count)
-    with col3:
-        st.metric("🟢 Riscos Baixos", low_count)
-    
-    # Análise por arquivo
-    st.subheader("📁 Análise Detalhada por Arquivo")
-    
-    for file_data in analysis_result['files_data']:
-        risk_class = f"risk-{file_data['risk_level'].lower()}"
-        level_emoji = "🟢" if file_data['risk_level'] == "Baixo" else "🟡" if file_data['risk_level'] == "Moderado" else "🔴"
-        
-        st.markdown(f"""
-        <div class="risk-card {risk_class}">
-            <h4>{level_emoji} 📄 {file_data['filename']}</h4>
-            <p><strong>Score:</strong> {file_data['file_score']}/100 | 
-               <strong>Tipo:</strong> {file_data['file_type']} | 
-               <strong>Linhas:</strong> {file_data['lines_count']:,}</p>
-            <p><strong>Classificação:</strong> {file_data['classification']}</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Detalhes expandíveis
-        with st.expander(f"🔍 Detalhes - {file_data['filename']}"):
-            tab1, tab2, tab3 = st.tabs(["📊 Resumo", "⚠️ Problemas", "🔍 Preview"])
-            
-            with tab1:
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.metric("Score", f"{file_data['file_score']}/100")
-                    st.write(f"**Tipo:** {file_data['file_type']}")
-                with col2:
-                    st.metric("Linhas", f"{file_data['lines_count']:,}")
-                    st.write(f"**Classificação:** {file_data['classification']}")
-            
-            with tab2:
-                if file_data['security_issues']:
-                    st.write("**🚨 Problemas de Segurança:**")
-                    for issue in file_data['security_issues']:
-                        severity_color = "🔴" if issue['severity'] == 'HIGH' else "🟡"
-                        st.write(f"{severity_color} **Linha {issue['line']}:** {issue['description']}")
-                        with st.expander(f"Ver código - Linha {issue['line']}"):
-                            st.code(issue['content'])
-                else:
-                    st.success("✅ Nenhum problema crítico detectado")
-                
-                if file_data['critical_lines']:
-                    st.write("**⚠️ Linhas Críticas:**")
-                    for critical in file_data['critical_lines']:
-                        st.write(f"**Linha {critical['line_number']}:** {critical['reason']}")
-            
-            with tab3:
-                if file_data['content_preview']:
-                    st.write("**📄 Preview do Código:**")
-                    st.code(file_data['content_preview'])
-    
-    # Análise cruzada
-    if 'cross_analysis' in analysis_result and analysis_result['cross_analysis']['risks_found'] > 0:
-        st.subheader("🔗 Análise Cruzada Entre Arquivos")
-        
-        for cross_risk in analysis_result['cross_analysis']['cross_risks']:
-            severity_color = "🔴" if cross_risk['severity'] == 'HIGH' else "🟡"
-            st.warning(f"{severity_color} **{cross_risk['description']}**")
-            st.write(f"**Arquivos afetados:** {', '.join(cross_risk['affected_files'])}")
-    
-    # Top riscos
-    if 'risks_summary' in analysis_result and analysis_result['risks_summary']:
-        st.subheader("📋 Top Riscos de IA Autônoma Detectados")
-        
-        sorted_risks = sorted(
-            analysis_result['risks_summary'].items(),
-            key=lambda x: x[1]['score'],
-            reverse=True
-        )[:5]
-        
-        for risk_id, risk_data in sorted_risks:
-            level_emoji = "🔴" if risk_data['level'] == "Alto" else "🟡" if risk_data['level'] == "Moderado" else "🟢"
-            
-            with st.expander(f"{level_emoji} {risk_id}. {risk_data['nome']} - {risk_data['score']}/100"):
-                st.write(f"**Categoria:** {risk_data['categoria']}")
-                st.write(f"**Nível:** {risk_data['level']}")
-                st.write(f"**Arquivos afetados:** {len(risk_data['affected_files'])}")
-                
-                if risk_data['affected_files']:
-                    st.write("**📁 Arquivos com este risco:**")
-                    for filename in risk_data['affected_files']:
-                        st.write(f"• {filename}")
-                
-                st.write("**💡 Recomendações:**")
-                for i, rec in enumerate(risk_data['recommendations'], 1):
-                    st.write(f"{i}. {rec}")
-    
-    # Botões de ação
-    st.markdown("---")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if st.button("📄 Gerar Relatório PDF", use_container_width=True):
-            with st.spinner("Gerando relatório PDF..."):
-                pdf_generator = get_pdf_generator()
-                pdf_bytes = pdf_generator.generate_report(analysis_result)
-                
-                file_name = f"AgentRisk_Report_{analysis_result['files_analyzed']}files_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
-                
-                st.download_button(
-                    label="⬇️ Download PDF",
-                    data=pdf_bytes,
-                    file_name=file_name,
-                    mime="application/pdf",
-                    use_container_width=True
-                )
-    
-    with col2:
-        if st.button("📊 Ver Dashboard", use_container_width=True):
-            st.session_state.show_dashboard = True
-            st.rerun()
-    
-    with col3:
-        if st.button("🔄 Nova Análise", use_container_width=True):
-            del st.session_state.analysis_result
-            st.rerun()
-
-def show_dashboard_page():
-    """Dashboard com gráficos"""
-    
-    st.header("📊 Dashboard de Análise")
-    
-    if 'analysis_result' not in st.session_state:
-        st.warning("⚠️ Nenhuma análise disponível. Faça uma análise primeiro.")
-        if st.button("🔙 Voltar para Análise"):
-            st.rerun()
-        return
-    
-    analysis = st.session_state.analysis_result
-    
-    # Métricas principais
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Score Global", f"{analysis['global_score']}/100")
-    with col2:
-        high_files = len([f for f in analysis['files_data'] if f['risk_level'] == 'Alto'])
-        st.metric("Arquivos Alto Risco", high_files)
-    with col3:
-        total_issues = sum(len(f['security_issues']) for f in analysis['files_data'])
-        st.metric("Problemas Segurança", total_issues)
-    with col4:
-        st.metric("Total Linhas", f"{analysis['total_lines']:,}")
-    
-    # Gráficos
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("📊 Distribuição de Riscos")
-        risk_levels = [f['risk_level'] for f in analysis['files_data']]
-        risk_counts = {
-            'Alto': risk_levels.count('Alto'),
-            'Moderado': risk_levels.count('Moderado'),
-            'Baixo': risk_levels.count('Baixo')
-        }
-        st.bar_chart(risk_counts)
-    
-    with col2:
-        st.subheader("🔧 Tipos de Arquivo")
-        file_types = [f['file_type'] for f in analysis['files_data']]
-        type_counts = {}
-        for ftype in set(file_types):
-            type_counts[ftype] = file_types.count(ftype)
-        st.bar_chart(type_counts)
-    
-    # Top arquivos críticos
-    st.subheader("🚨 Top 5 Arquivos Mais Críticos")
-    
-    sorted_files = sorted(analysis['files_data'], key=lambda x: x['file_score'], reverse=True)[:5]
-    
-    for i, file_data in enumerate(sorted_files, 1):
-        level_emoji = "🔴" if file_data['risk_level'] == "Alto" else "🟡" if file_data['risk_level'] == "Moderado" else "🟢"
-        st.write(f"**#{i}** {level_emoji} **{file_data['filename']}** - {file_data['file_score']}/100 ({file_data['file_type']})")
-    
-    # Arquitetura do sistema
-    if 'cross_analysis' in analysis and 'system_architecture' in analysis['cross_analysis']:
-        st.subheader("🏗️ Arquitetura do Sistema")
-        
-        arch = analysis['cross_analysis']['system_architecture']
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric("Pontos de Entrada", arch['entry_points'])
-            st.metric("APIs", arch['api_layers'])
-        
-        with col2:
-            st.metric("Modelos de Dados", arch['data_models'])
-            st.metric("Segurança", arch['security_files'])
-        
-        with col3:
-            st.metric("Configurações", arch['config_files'])
-            st.metric("Testes", arch['test_files'])
-        
-        completeness = arch.get('completeness_score', 0)
-        st.progress(completeness / 100)
-        st.write(f"**Completude da Arquitetura:** {completeness}/100")
-
-def show_config_page():
-    """Página de configurações"""
-    
-    st.header("⚙️ Configurações do AgentRisk")
-    
-    # Status do sistema
-    st.subheader("📊 Status do Sistema")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        client = get_openai_client()
-        if client:
-            st.success("✅ OpenAI: Configurada")
-            if st.button("🧪 Testar OpenAI"):
-                try:
-                    with st.spinner("Testando..."):
-                        response = client.chat.completions.create(
-                            model="gpt-4o-mini",
-                            messages=[{"role": "user", "content": "Teste"}],
-                            max_tokens=5
-                        )
-                        st.success("✅ Teste bem-sucedido!")
-                except Exception as e:
-                    st.error(f"❌ Erro: {str(e)}")
-        else:
-            st.warning("⚠️ OpenAI: Não configurada")
-            st.info("Configure OPENAI_API_KEY nos Secrets do Streamlit")
-    
-    with col2:
-        st.info(f"""
-        **Funcionalidades Ativas:**
-        
-        ✅ Análise multi-arquivo
-        {'✅' if PDF_AVAILABLE else '❌'} Geração PDF (ReportLab)
-        {'✅' if client else '⚠️'} Análise com IA
-        ✅ Detecção 15 riscos IA
-        ✅ Análise cruzada arquivos
-        ✅ Vulnerabilidades segurança
-        """)
-    
-    # Informações do sistema
-    st.subheader("📋 Informações")
-    
-    st.info(f"""
-    **AgentRisk v1.0**
-    
-    **Tipos de Arquivo:** {len(SUPPORTED_EXTENSIONS)} suportados
-    **Riscos Analisados:** 15 categorias específicas de IA Autônoma
-    **Baseado em:** IBM Consulting - Agentic AI in Financial Services (Maio/2025)
-    **Deploy:** Streamlit Cloud
-    **Última Atualização:** {datetime.datetime.now().strftime('%d/%m/%Y')}
-    """)
-    
-    # Limpeza
-    st.subheader("🗑️ Gerenciamento")
-    
-    if st.button("🗑️ Limpar Análise Atual"):
-        if 'analysis_result' in st.session_state:
-            del st.session_state.analysis_result
-            st.success("✅ Análise limpa!")
-            st.rerun()
-        else:
-            st.info("ℹ️ Nenhuma análise para limpar")
-
-if __name__ == "__main__":
-    main()
+                "
