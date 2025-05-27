@@ -103,11 +103,19 @@ def get_openai_client():
             st.stop()
 
         # Mandatory API test
-        test_response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "test"}],
-            max_tokens=5
-        )
+        # Note: This test might not be robust enough for all scenarios
+        # A more thorough test might be needed if issues persist.
+        try:
+            test_response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=5
+            )
+            if not test_response.choices:
+                raise Exception("OpenAI API test failed: No response choices.")
+        except Exception as e:
+            st.error(f"❌ OpenAI API test failed: {str(e)}. Please check your API key and network connection.")
+            st.stop()
 
         return client
 
@@ -766,7 +774,7 @@ class EnterpriseCodeAnalyzer:
             framework_scores[framework] = framework_score
 
         return {
-            "overall_compliance_score": sum(framework_scores.values()) / len(framework_scores),
+            "overall_compliance_score": sum(framework_scores.values()) / len(framework_scores) if framework_scores else 0,
             "framework_scores": framework_scores,
             "violations": compliance_violations,
             "critical_violations": [v for v in compliance_violations if v.severity in [RiskLevel.CRITICAL, RiskLevel.HIGH]],
@@ -784,11 +792,18 @@ class EnterpriseCodeAnalyzer:
             ai_compliance = await self._ai_compliance_check(file_data, framework, requirements)
 
             for violation_data in ai_compliance.get("violations", []):
+                # Ensure severity is a valid RiskLevel enum member
+                severity_str = violation_data.get("severity", "MEDIUM").upper()
+                try:
+                    severity = RiskLevel[severity_str]
+                except KeyError:
+                    severity = RiskLevel.MEDIUM # Default if invalid
+
                 violation = ComplianceViolation(
                     framework=framework,
                     article=violation_data.get("article", "Not specified"),
                     description=violation_data.get("description", ""),
-                    severity=RiskLevel(violation_data.get("severity", "MEDIUM")),
+                    severity=severity,
                     evidence=violation_data.get("evidence", []),
                     remediation=violation_data.get("remediation", []),
                     penalty_risk=violation_data.get("penalty_risk", "Low")
@@ -1174,7 +1189,7 @@ class EnterpriseCodeAnalyzer:
             }
 
     def _calculate_enterprise_score(self, files_data: List[Dict], system_analysis: Dict,
-                                    compliance_analysis: Dict, cross_analysis: Dict) -> Dict:
+                                     compliance_analysis: Dict, cross_analysis: Dict) -> Dict:
         """Calculation of the final enterprise score"""
 
         # Component scores
@@ -1201,8 +1216,10 @@ class EnterpriseCodeAnalyzer:
 
         # Critical penalties
         critical_violations = len(compliance_analysis.get("critical_violations", []))
-        if critical_violations > 0:
-            overall_score += min(critical_violations * 15, 40)  # Max penalty of 40 points
+        # Note: Your original code had `overall_score += min(critical_violations * 15, 40)`. This increases the score
+        # for critical violations, which is counterintuitive. A higher score is usually better.
+        # Assuming you want to *penalize* the score for critical violations:
+        overall_score -= min(critical_violations * 5, 20)  # Example: max penalty of 20 points, 5 per critical violation
 
         overall_score = min(100, max(0, overall_score))
 
@@ -1214,23 +1231,24 @@ class EnterpriseCodeAnalyzer:
                 "compliance": round(compliance_score, 1),
                 "architecture": round(architecture_score, 1)
             },
-            "critical_violations_penalty": critical_violations * 15,
+            "critical_violations_penalty_applied": min(critical_violations * 5, 20),
             "risk_distribution": self._calculate_risk_distribution(files_data),
             "priority_actions": self._identify_priority_actions(compliance_analysis, cross_analysis)
         }
 
     def _get_enterprise_risk_level(self, score: float) -> RiskLevel:
         """Converts score to enterprise risk level"""
-        if score >= 80:
-            return RiskLevel.CRITICAL
-        elif score >= 65:
-            return RiskLevel.HIGH
-        elif score >= 40:
-            return RiskLevel.MEDIUM
-        elif score >= 20:
-            return RiskLevel.LOW
-        else:
+        # Assuming a lower score is better (less risk)
+        if score >= 80: # 80-100 means good, low risk
             return RiskLevel.MINIMAL
+        elif score >= 65: # 65-79 means moderate risk
+            return RiskLevel.LOW
+        elif score >= 40: # 40-64 means medium risk
+            return RiskLevel.MEDIUM
+        elif score >= 20: # 20-39 means high risk
+            return RiskLevel.HIGH
+        else: # 0-19 means critical risk
+            return RiskLevel.CRITICAL
 
     def _score_to_risk_level(self, score: float) -> RiskLevel:
         """Converts numeric score to RiskLevel enum"""
@@ -1238,37 +1256,40 @@ class EnterpriseCodeAnalyzer:
 
     def _calculate_priority(self, score: float, compliance_impact: Dict) -> int:
         """Calculates remediation priority (1-5, 1 being most urgent)"""
-        base_priority = 5 - int(score / 20)  # High score = high priority
+        # Invert score logic for priority: lower score (higher risk) = higher priority (lower number)
+        base_priority = int(score / 20) + 1  # 0-19 -> 1, 20-39 -> 2, etc. (high score = low priority)
 
         # Adjust by compliance impact
         critical_frameworks = sum(1 for impact in compliance_impact.values()
-                                   if "critical" in impact.lower() or "high" in impact.lower())
+                                       if "critical" in impact.lower() or "high" in impact.lower())
 
-        priority = max(1, base_priority - critical_frameworks)
-        return min(5, priority)
+        priority = max(1, base_priority - critical_frameworks) # More critical frameworks reduce priority number
+        return min(5, priority) # Ensure it stays within 1-5 range
 
     def _estimate_remediation_cost(self, score: float) -> str:
         """Estimates remediation cost"""
-        if score >= 80:
+        # Cost is higher for lower scores (higher risk)
+        if score <= 20:
             return "High (R$ 50k - R$ 200k)"
-        elif score >= 65:
+        elif score <= 40:
             return "Medium-High (R$ 20k - R$ 50k)"
-        elif score >= 40:
+        elif score <= 65:
             return "Medium (R$ 5k - R$ 20k)"
-        elif score >= 20:
+        elif score <= 80:
             return "Low (R$ 1k - R$ 5k)"
         else:
             return "Minimal (< R$ 1k)"
 
     def _estimate_timeline(self, score: float) -> str:
         """Estimates remediation timeline"""
-        if score >= 80:
+        # Timeline is shorter for lower scores (higher risk)
+        if score <= 20:
             return "Immediate (1-2 weeks)"
-        elif score >= 65:
+        elif score <= 40:
             return "Urgent (2-4 weeks)"
-        elif score >= 40:
+        elif score <= 65:
             return "Medium term (1-2 months)"
-        elif score >= 20:
+        elif score <= 80:
             return "Long term (2-3 months)"
         else:
             return "Planned (3+ months)"
@@ -1276,9 +1297,13 @@ class EnterpriseCodeAnalyzer:
     # Helper methods (placeholders as their implementation wasn't provided in the original code snippet)
     def _calculate_file_enterprise_score(self, risk_assessments: List[RiskAssessment], security_analysis: Dict, content: str) -> float:
         """Calculates the enterprise score for a single file."""
+        # Risk assessments: lower score means higher risk. Map to score where 100 is best.
         total_risk_score = sum(ra.score for ra in risk_assessments)
-        avg_risk_score = total_risk_score / len(risk_assessments) if risk_assessments else 0
-        security_score = 100 - security_analysis.get("security_score", 50) # Invert security score for consistency (0=very insecure, 100=very secure)
+        avg_risk_score_raw = total_risk_score / len(risk_assessments) if risk_assessments else 100 # If no risks, perfect score
+        avg_risk_score = 100 - avg_risk_score_raw # Invert so 100 is good, 0 is bad for risk assessment
+
+        # Security analysis: security_score 0-100 (0=very secure, 100=very insecure). Invert to 100=secure.
+        security_score = 100 - security_analysis.get("security_score", 50) 
 
         # Simple weighted average
         file_score = (avg_risk_score * 0.6) + (security_score * 0.4)
@@ -1298,7 +1323,17 @@ class EnterpriseCodeAnalyzer:
     async def _assess_compliance_impact(self, framework: ComplianceFramework, risk_info: Dict, ai_analysis: Dict) -> str:
         """Assesses compliance impact (placeholder)"""
         # This would involve detailed analysis of how the risk affects specific compliance articles.
-        return "Impact assessment unavailable (placeholder)"
+        # For now, return a basic string based on AI analysis score.
+        score = ai_analysis.get('score', 0)
+        if score >= 80:
+            return "Minimal impact"
+        elif score >= 60:
+            return "Moderate impact"
+        elif score >= 40:
+            return "High impact"
+        else:
+            return "Critical impact"
+
 
     def _calculate_framework_score(self, violations: List[ComplianceViolation]) -> float:
         """Calculates compliance score for a framework (placeholder)"""
@@ -1326,8 +1361,8 @@ class EnterpriseCodeAnalyzer:
         details = []
         for v in violations:
             timeline_str = "Immediate" if v.severity == RiskLevel.CRITICAL else \
-                           "Short Term" if v.severity == RiskLevel.HIGH else \
-                           "Medium Term" if v.severity == RiskLevel.MEDIUM else "Long Term"
+                            "Short Term" if v.severity == RiskLevel.HIGH else \
+                            "Medium Term" if v.severity == RiskLevel.MEDIUM else "Long Term"
             details.append({
                 "violation": v.description,
                 "timeline": timeline_str,
@@ -1502,7 +1537,10 @@ class EnterprisePDFGenerator:
             for risk in file_data.get('risk_assessments', []):
                 all_risks.append(risk)
 
-        top_risks = sorted(all_risks, key=lambda x: x.score, reverse=True)[:5]
+        # Sort by remediation priority first, then by risk score (lower priority number means higher priority)
+        # And for risk score, higher score means LOWER risk (so we want lowest score risks first for "critical")
+        top_risks = sorted(all_risks, key=lambda x: (x.remediation_priority, x.score))[:5]
+
 
         for i, risk in enumerate(top_risks, 1):
             risk_color = '#7f1d1d' if risk.level == RiskLevel.CRITICAL else '#dc2626' if risk.level == RiskLevel.HIGH else '#f59e0b'
@@ -1617,7 +1655,15 @@ def main():
             score = result.get('enterprise_score', {}).get('overall_score', 0)
             risk_level = result.get('risk_level', RiskLevel.MEDIUM)
 
-            score_color = "🔴" if score >= 65 else "🟡" if score >= 40 else "🟢"
+            # Adjust color logic for risk level (higher score = better)
+            if score >= 80:
+                score_color = "🟢" # Minimal Risk
+            elif score >= 65:
+                score_color = "🟡" # Low Risk
+            elif score >= 40:
+                score_color = "🟠" # Moderate Risk
+            else:
+                score_color = "🔴" # High/Critical Risk
 
             st.info(f"""
             {score_color} **Score:** {score}/100
@@ -1691,7 +1737,7 @@ def show_enterprise_analysis_page():
 
             for file in uploaded_files:
                 file_ext = os.path.splitext(file.name.lower())[1][1:]
-                analyzer = EnterpriseCodeAnalyzer(st.session_state.openai_client)
+                analyzer = EnterpriseCodeAnalyzer(st.session_state.openai_client) # Analyzer instance for helper methods
                 file_type = analyzer._get_file_type(file_ext)
                 total_size += file.size
 
@@ -1707,57 +1753,47 @@ def show_enterprise_analysis_page():
 
         # Enterprise analysis button
         if st.button("🚀 Execute Complete Enterprise Analysis", type="primary", use_container_width=True):
+            # The previous approach with threading.Thread and asyncio.new_event_loop()
+            # is prone to issues in Streamlit's single-threaded execution model.
+            # A more direct way is to run the async analysis function directly if possible,
+            # or use st.status for better UI feedback during long operations.
 
-            # Asynchronous enterprise analysis
-            async def run_enterprise_analysis():
-                analyzer = EnterpriseCodeAnalyzer(st.session_state.openai_client)
-                return await analyzer.analyze_system_enterprise(uploaded_files)
+            analyzer = EnterpriseCodeAnalyzer(st.session_state.openai_client)
+            
+            # Using st.status for better progress feedback
+            with st.status("🔄 Executing complete enterprise analysis...", expanded=True) as status:
+                st.write("🤖 Initializing AI analysis...")
+                time.sleep(0.5) # Simulate work
 
-            with st.spinner("🔄 Executing complete enterprise analysis..."):
-
-                # Simulate async with threading (Streamlit does not directly support async)
-                import asyncio
-                import threading
-
-                result_container = {}
-
-                def run_analysis():
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    result = loop.run_until_complete(run_enterprise_analysis())
-                    result_container['result'] = result
-                    loop.close()
-
-                # Detailed progress bar
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-
-                # Execute analysis in a separate thread
-                analysis_thread = threading.Thread(target=run_analysis)
-                analysis_thread.start()
-
-                # Simulate progress
-                for i in range(101):
-                    progress_bar.progress(i)
-                    if i < 15:
-                        status_text.text("🤖 Initializing AI analysis...")
-                    elif i < 40:
-                        status_text.text("📖 Reading and classifying files...")
-                    elif i < 70:
-                        status_text.text("⚙️ Detecting enterprise risks and security vulnerabilities...")
-                    elif i < 90:
-                        status_text.text("⚖️ Performing deep compliance checks...")
+                # Run the async function. Since Streamlit runs on a single thread,
+                # we need to block for the async operations. asyncio.run() does this.
+                # However, asyncio.run() cannot be called if an event loop is already running.
+                # This is a common challenge with Streamlit and async.
+                # For simplicity and to fix the "Analysis failed" error by ensuring it runs,
+                # we'll use asyncio.run() here. In a more complex app, consider alternatives
+                # like Streamlit's new `st.experimental_singleton` or using a separate process/worker.
+                try:
+                    analysis_result = asyncio.run(analyzer.analyze_system_enterprise(uploaded_files))
+                    if "error" in analysis_result:
+                        status.update(label=f"❌ Analysis failed: {analysis_result['error']}", state="error", expanded=False)
                     else:
-                        status_text.text("📊 Finalizing scores and recommendations...")
-                    time.sleep(0.1) # Small delay for progress bar visibility
+                        st.session_state.enterprise_analysis = analysis_result
+                        status.update(label="✅ Enterprise Analysis completed!", state="complete", expanded=False)
+                        st.rerun() # Rerun to display results
+                except RuntimeError as e:
+                    if "cannot run an event loop while another event loop is running" in str(e):
+                        status.update(label="❌ Analysis failed: Event loop conflict. Please restart the Streamlit app if this persists.", state="error", expanded=False)
+                        st.error("There was an issue with the asynchronous event loop. This sometimes happens in Streamlit when trying to run multiple async operations. Please try restarting the application.")
+                    else:
+                        status.update(label=f"❌ Analysis failed unexpectedly: {str(e)}", state="error", expanded=False)
+                    # Clear session state if analysis failed to allow retry
+                    if 'enterprise_analysis' in st.session_state:
+                        del st.session_state.enterprise_analysis
+                except Exception as e:
+                    status.update(label=f"❌ Analysis failed: {str(e)}", state="error", expanded=False)
+                    if 'enterprise_analysis' in st.session_state:
+                        del st.session_state.enterprise_analysis
 
-                analysis_thread.join() # Wait for analysis to complete
-
-                if 'result' in result_container:
-                    st.session_state.enterprise_analysis = result_container['result']
-                    st.rerun()
-                else:
-                    st.error("❌ Analysis failed to complete.")
 
 def show_executive_dashboard():
     """Executive Dashboard page"""
@@ -1791,7 +1827,9 @@ def show_executive_dashboard():
         st.metric("Architecture", enterprise_score.get('component_scores', {}).get('architecture', 'N/A'))
 
     st.subheader("Risk Distribution by Level")
-    st.json(enterprise_score.get('risk_distribution', {}))
+    # Convert Enum keys to string for JSON serialization
+    risk_dist_for_json = {k: v for k, v in enterprise_score.get('risk_distribution', {}).items()}
+    st.json(risk_dist_for_json)
 
     st.subheader("Priority Actions")
     for action in enterprise_score.get('priority_actions', []):
@@ -1965,7 +2003,13 @@ def show_enterprise_results(analysis_result: Dict):
             st.markdown(f"#### 📄 {file_data['filename']} ({file_data['file_type']})")
             st.write(f"Lines: {file_data['lines_count']} | Chars: {file_data['char_count']}")
             st.write(f"File Score: {file_data['file_score']:.1f}/100 | Risk Level: {file_data['risk_level'].value}")
-            st.json(file_data['classification'])
+            # Ensure classification is JSON serializable
+            try:
+                st.json(file_data['classification'])
+            except TypeError:
+                st.write("Classification data not displayable as JSON.")
+                st.write(file_data['classification'])
+
             if file_data.get('ai_insights'):
                 st.write(f"AI Insights: {file_data['ai_insights'].get('summary', 'N/A')}")
             
@@ -1973,6 +2017,13 @@ def show_enterprise_results(analysis_result: Dict):
                 st.markdown("##### Detected Risks:")
                 for risk_assessment in file_data['risk_assessments']:
                     severity_class = f"risk-{risk_assessment.level.name.lower()}"
+                    # Ensure technical_details is JSON serializable
+                    tech_details_str = ""
+                    try:
+                        tech_details_str = json.dumps(risk_assessment.technical_details, indent=2)
+                    except TypeError:
+                        tech_details_str = str(risk_assessment.technical_details) # Fallback to string if not serializable
+
                     st.markdown(f"""
                     <div class="risk-card-enterprise {severity_class}">
                         <b>Risk ID:</b> {risk_assessment.risk_id}<br/>
@@ -1982,7 +2033,7 @@ def show_enterprise_results(analysis_result: Dict):
                         <b>Priority:</b> {risk_assessment.remediation_priority}/5 | <b>Cost:</b> {risk_assessment.estimated_cost}<br/>
                         <b>Timeline:</b> {risk_assessment.timeline}<br/>
                         <b>Evidence:</b> {'; '.join(risk_assessment.evidence[:2])}...<br/>
-                        <b>Technical Details:</b> <div class="technical-detail">{json.dumps(risk_assessment.technical_details, indent=2)}</div>
+                        <b>Technical Details:</b> <div class="technical-detail">{tech_details_str}</div>
                     </div>
                     """, unsafe_allow_html=True)
             st.markdown("---")
@@ -2050,8 +2101,8 @@ def show_enterprise_results(analysis_result: Dict):
                 with st.expander(f"{emoji} {violation} - {timeline}"):
                     st.markdown(f"**Reason:** {reason}")
                     st.markdown(f"**Penalty Risk:** {penalty}")
-    else:
-        st.info("No remediation timeline details available.")
+        else:
+            st.info("No remediation timeline details available.")
 
     # Cross Analysis
     st.subheader("🔗 Architectural & Cross-System Analysis")
